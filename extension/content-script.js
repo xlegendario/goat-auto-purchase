@@ -438,43 +438,37 @@ function clickPreferenceButtonInModal(modal, value) {
 }
 
 function clickOptionUnderHeading(modal, headingText, optionText) {
-  const modalRect = modal.getBoundingClientRect();
   const headingTarget = normalizeText(headingText);
   const optionTarget = normalizeText(optionText);
 
-  const heading = getVisibleElements("div, span, p").find((el) => {
-    const rect = el.getBoundingClientRect();
-    return (
-      rect.left >= modalRect.left &&
-      rect.right <= modalRect.right &&
-      rect.top >= modalRect.top &&
-      rect.bottom <= modalRect.bottom &&
-      normalizeText(el.innerText).includes(headingTarget)
-    );
+  const heading = Array.from(modal.querySelectorAll("div, span, p")).find((el) => {
+    return isVisible(el) && normalizeText(el.innerText).includes(headingTarget);
   });
 
   if (!heading) {
     console.log("Heading not found:", headingText);
+    console.log("Modal text:", modal.innerText);
     return false;
   }
 
   const headingRect = heading.getBoundingClientRect();
 
-  const option = getVisibleElements("button, [role='button'], div, span").find((el) => {
-    const rect = el.getBoundingClientRect();
-    const text = normalizeText(el.innerText);
+  const option = Array.from(modal.querySelectorAll("button, [role='button'], div, span"))
+    .filter(isVisible)
+    .find((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = normalizeText(el.innerText);
 
-    return (
-      text === optionTarget &&
-      rect.left >= modalRect.left &&
-      rect.right <= modalRect.right &&
-      rect.top > headingRect.bottom &&
-      rect.top < headingRect.bottom + 120
-    );
-  });
+      return (
+        text === optionTarget &&
+        rect.top > headingRect.bottom &&
+        rect.top < headingRect.bottom + 140
+      );
+    });
 
   if (!option) {
     console.log("Option not found:", optionText);
+    console.log("Modal text:", modal.innerText);
     return false;
   }
 
