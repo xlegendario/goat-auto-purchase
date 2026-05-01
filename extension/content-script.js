@@ -386,31 +386,85 @@ async function selectSizeFromSlider(targetSize) {
 
 function clickExactTextInModal(modal, textValue) {
   const target = normalizeText(textValue);
+  const modalRect = modal.getBoundingClientRect();
 
-  const elements = Array.from(
-    modal.querySelectorAll("button, [role='button'], div, span, p")
-  ).filter(isVisible);
+  const rowMap = {
+    men: { heading: "what category do you shop for most often", index: 0 },
+    women: { heading: "what category do you shop for most often", index: 1 },
+    youth: { heading: "what category do you shop for most often", index: 2 },
+    infant: { heading: "what category do you shop for most often", index: 3 },
 
-  const candidates = elements.filter((el) => {
-    return normalizeText(el.innerText) === target;
-  });
+    us: { heading: "what size chart do you prefer", index: 0 },
+    uk: { heading: "what size chart do you prefer", index: 1 },
+    eu: { heading: "what size chart do you prefer", index: 2 },
+    fr: { heading: "what size chart do you prefer", index: 3 },
 
-  const smallest = candidates.sort((a, b) => {
-    const ar = a.getBoundingClientRect();
-    const br = b.getBoundingClientRect();
-    return ar.width * ar.height - br.width * br.height;
-  })[0];
+    save: { save: true }
+  };
 
-  if (!smallest) {
-    console.log("Exact text not found in modal:", textValue);
-    console.log("Available modal text:", modal.innerText);
+  if (rowMap[target]?.save) {
+    const x = modalRect.left + modalRect.width / 2;
+    const y = modalRect.bottom - 28;
+    console.log("Clicking SAVE fallback:", { x, y });
+    clickAtPoint(x, y);
+    return true;
+  }
+
+  const config = rowMap[target];
+  if (!config) {
+    console.log("No fallback config for:", textValue);
     return false;
   }
 
-  console.log("Clicking exact modal text:", textValue, smallest);
-  clickElementAtCenter(smallest);
+  const headingEl = Array.from(document.querySelectorAll("div, span, p"))
+    .filter(isVisible)
+    .find((el) => {
+      const r = el.getBoundingClientRect();
+      return (
+        r.left >= modalRect.left &&
+        r.right <= modalRect.right &&
+        r.top >= modalRect.top &&
+        r.bottom <= modalRect.bottom &&
+        normalizeText(el.innerText).includes(config.heading)
+      );
+    });
+
+  if (!headingEl) {
+    console.log("Fallback heading not found:", config.heading);
+    return false;
+  }
+
+  const hr = headingEl.getBoundingClientRect();
+
+  const xPositions = [0.14, 0.36, 0.58, 0.80];
+  const x = modalRect.left + modalRect.width * xPositions[config.index];
+  const y = hr.bottom + 28;
+
+  console.log("Clicking modal option fallback:", {
+    textValue,
+    x,
+    y
+  });
+
+  clickAtPoint(x, y);
   return true;
 }
+
+function clickAtPoint(x, y) {
+  const el = document.elementFromPoint(x, y) || document.body;
+
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    el.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      view: window
+    }));
+  }
+}
+
 
 function getCategoryFromSizeLabel(labelText) {
   const firstPart = normalizeText(labelText).split("/")[0];
