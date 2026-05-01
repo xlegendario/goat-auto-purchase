@@ -55,15 +55,7 @@ export async function fetchGoatPurchaseCandidates() {
 
   url.searchParams.set(
     "filterByFormula",
-    `
-    AND(
-      {GOAT Purchase Needed} = 1
-      {SKU} != "",
-      {Size} != "",
-      {Maximum Buying Price} != "",
-      {Merchant GOAT Auto Purchase Enabled} = 1
-    )
-    `
+    "AND({GOAT Purchase Needed}=1,{SKU}!=\"\",{Size}!=\"\",{Maximum Buying Price}!=\"\")"
   );
 
   return await fetchAllRecords(url);
