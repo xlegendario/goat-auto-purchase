@@ -380,34 +380,56 @@ async function selectSizeFromSlider(targetSize) {
     return false;
   }
 
-  const normalizedTarget = normalizeSize(targetSize);
+  const normalizedTarget = Number(normalizeSize(targetSize));
 
   for (let attempt = 0; attempt < 30; attempt++) {
     if (await stopIfNeeded("size slider")) return false;
 
-    const tile = findSizeTile(normalizedTarget);
+    const tiles = findVisibleSizeTiles();
+    const parsedTiles = tiles
+      .map((el) => ({
+        el,
+        size: Number(normalizeSize(String(el.innerText || "").split("\n")[0]))
+      }))
+      .filter((x) => Number.isFinite(x.size));
 
-    if (tile) {
-      console.log("Clicking GOAT size tile:", tile.innerText);
-      clickElement(tile);
+    console.log("Visible GOAT sizes:", parsedTiles.map((x) => x.size));
+
+    const exact = parsedTiles.find((x) => x.size === normalizedTarget);
+
+    if (exact) {
+      console.log("Clicking exact GOAT size tile:", exact.el.innerText);
+      clickElement(exact.el);
       await sleep(1500);
       return true;
     }
 
-    const rightArrow = findSliderArrow("right");
+    if (!parsedTiles.length) return false;
 
-    if (!rightArrow) {
-      console.log("Right size-slider arrow not found");
+    const minVisible = Math.min(...parsedTiles.map((x) => x.size));
+    const maxVisible = Math.max(...parsedTiles.map((x) => x.size));
+
+    let arrow = null;
+
+    if (normalizedTarget < minVisible) {
+      arrow = findSliderArrow("left");
+      console.log("Target is left of visible sizes, clicking left arrow");
+    } else if (normalizedTarget > maxVisible) {
+      arrow = findSliderArrow("right");
+      console.log("Target is right of visible sizes, clicking right arrow");
+    } else {
+      console.log("Target should be visible but exact tile not found");
       return false;
     }
 
-    clickElement(rightArrow);
-    await sleep(700);
+    if (!arrow) return false;
+
+    clickElement(arrow);
+    await sleep(900);
   }
 
   return false;
 }
-
 function findLikelySizeArea() {
   const candidates = getVisibleElements("div, section, footer");
 
@@ -532,41 +554,21 @@ function findSizeTile(normalizedTarget) {
 }
 
 function findSliderArrow(direction) {
-  const sizeTiles = findVisibleSizeTiles();
+  const bounds = getSizeSliderBounds();
+  if (!bounds) return null;
 
-  if (!sizeTiles.length) {
-    console.log("No visible size tiles, cannot find size arrow");
-    return null;
-  }
+  const targetText = direction === "left" ? "←" : "→";
 
-  const tileRects = sizeTiles.map((el) => el.getBoundingClientRect());
-
-  const minTop = Math.min(...tileRects.map((r) => r.top)) - 30;
-  const maxBottom = Math.max(...tileRects.map((r) => r.bottom)) + 30;
-
-  const arrows = getVisibleElements("button, div, span").filter((el) => {
+  return getVisibleElements("button, div, span").find((el) => {
     const text = normalizeText(el.innerText);
     const rect = el.getBoundingClientRect();
 
-    if (direction === "right" && text !== "→") return false;
-    if (direction === "left" && text !== "←") return false;
-
     return (
-      rect.top >= minTop &&
-      rect.bottom <= maxBottom
+      text === targetText &&
+      rect.top >= bounds.top &&
+      rect.bottom <= bounds.bottom
     );
-  });
-
-  console.log("Size-slider arrows near tiles:", arrows.map((el) => ({
-    text: el.innerText,
-    rect: el.getBoundingClientRect()
-  })));
-
-  if (direction === "right") {
-    return arrows.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0] || null;
-  }
-
-  return arrows.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0] || null;
+  }) || null;
 }
 
 function findBestPriceOption() {
