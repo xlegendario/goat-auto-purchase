@@ -57,7 +57,7 @@ export async function fetchGoatPurchaseCandidates() {
     "filterByFormula",
     `
     AND(
-      {GOAT Purchase Status} = "GOAT_PURCHASE_NEEDED",
+      {GOAT Purchase Needed} = 1
       {SKU} != "",
       {Size} != "",
       {Maximum Buying Price} != "",
