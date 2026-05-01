@@ -76,12 +76,12 @@ async function handleProductPage() {
 
   const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
   const resolved = prefData.goatResolvedPreference;
-
-  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.saved !== true) {
+  
+  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.returnedFromPreferences !== true) {
     const sizeType = await detectGoatSizeType();
     const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
     const category = sizeTypeToCategory(sizeType);
-
+  
     if (!targetSize || !category) {
       await reportTaskResult("SIZE_NOT_FOUND", {
         errorMessage: `Could not resolve GOAT preference. sizeType=${sizeType}, targetSize=${targetSize}`,
@@ -89,30 +89,30 @@ async function handleProductPage() {
       });
       return;
     }
-
+  
     await chrome.storage.local.set({
       goatResolvedPreference: {
         recordId: currentTask.recordId,
         sizeType,
         category,
         targetSize,
-        saved: false
+        returnedFromPreferences: false
       }
     });
-
-    console.log("Resolved GOAT preference, going to preferences page:", {
+  
+    console.log("Going to GOAT preferences page every run:", {
       sizeType,
       category,
       targetSize
     });
-
+  
     window.location.href = "https://www.goat.com/account/preferences";
     return;
   }
-
+  
   const targetSize = resolved.targetSize;
-
-  console.log("Preferences already saved. Opening product size panel:", resolved);
+  
+  console.log("Returned from preferences. Opening product size panel:", resolved);
 
   const opened = await openSizePanel();
 
@@ -222,7 +222,7 @@ async function handlePreferencesPage() {
   await chrome.storage.local.set({
     goatResolvedPreference: {
       ...resolved,
-      saved: true
+      returnedFromPreferences: true
     }
   });
 
