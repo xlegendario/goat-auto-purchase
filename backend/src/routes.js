@@ -6,6 +6,8 @@ const router = express.Router();
 
 router.post("/tasks/next", async (req, res) => {
   try {
+    console.log("POST /tasks/next body:", req.body);
+
     const runnerName = req.body.runnerName;
     const accountGroupKey = req.body.accountGroupKey || null;
 
@@ -19,6 +21,8 @@ router.post("/tasks/next", async (req, res) => {
       task
     });
   } catch (err) {
+    console.error("❌ /tasks/next failed:", err);
+
     res.status(500).json({
       ok: false,
       error: err.message
@@ -28,6 +32,11 @@ router.post("/tasks/next", async (req, res) => {
 
 router.post("/tasks/:recordId/result", async (req, res) => {
   try {
+    console.log("POST /tasks/:recordId/result", {
+      recordId: req.params.recordId,
+      body: req.body
+    });
+
     const result = await submitTaskResult(req.params.recordId, req.body);
 
     res.json({
@@ -35,6 +44,8 @@ router.post("/tasks/:recordId/result", async (req, res) => {
       result
     });
   } catch (err) {
+    console.error("❌ /tasks/:recordId/result failed:", err);
+
     res.status(500).json({
       ok: false,
       error: err.message
