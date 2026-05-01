@@ -74,10 +74,10 @@ async function handleProductPage() {
 
   await verifyProductOrFail();
 
-  const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
-  const resolved = prefData.goatResolvedPreference;
+  const prefData = await chrome.storage.local.get(["goatPreferenceSetForProduct"]);
+  const alreadyReturned = prefData.goatPreferenceSetForProduct === currentTask.recordId;
   
-  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.returnedFromPreferences !== true) {
+  if (!alreadyReturned) {
     const sizeType = await detectGoatSizeType();
     const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
     const category = sizeTypeToCategory(sizeType);
@@ -220,10 +220,7 @@ async function handlePreferencesPage() {
   clickElement(saveButton);
 
   await chrome.storage.local.set({
-    goatResolvedPreference: {
-      ...resolved,
-      returnedFromPreferences: true
-    }
+    goatPreferenceSetForProduct: currentTask.recordId
   });
 
   await sleep(2500);
