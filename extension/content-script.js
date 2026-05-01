@@ -469,22 +469,38 @@ async function openSizePanel() {
 function getSizeSliderBounds() {
   const arrows = getVisibleElements("button, div, span").filter((el) => {
     const text = normalizeText(el.innerText);
-    return text === "←" || text === "→";
+    const rect = el.getBoundingClientRect();
+
+    return (
+      (text === "←" || text === "→") &&
+      rect.top > window.innerHeight * 0.55 &&
+      rect.top < window.innerHeight * 0.9
+    );
   });
 
-  const leftArrow = arrows.find((el) => normalizeText(el.innerText) === "←");
-  const rightArrow = arrows.find((el) => normalizeText(el.innerText) === "→");
+  const leftArrow = arrows
+    .filter((el) => normalizeText(el.innerText) === "←")
+    .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
+
+  const rightArrow = arrows
+    .filter((el) => normalizeText(el.innerText) === "→")
+    .sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0];
 
   if (!leftArrow || !rightArrow) return null;
 
   const leftRect = leftArrow.getBoundingClientRect();
   const rightRect = rightArrow.getBoundingClientRect();
 
+  console.log("GOAT size arrows found:", {
+    left: leftRect,
+    right: rightRect
+  });
+
   return {
     left: leftRect.right,
     right: rightRect.left,
-    top: Math.min(leftRect.top, rightRect.top) - 40,
-    bottom: Math.max(leftRect.bottom, rightRect.bottom) + 80
+    top: Math.min(leftRect.top, rightRect.top) - 50,
+    bottom: Math.max(leftRect.bottom, rightRect.bottom) + 90
   };
 }
 
@@ -525,26 +541,25 @@ function findSizeTile(normalizedTarget) {
 }
 
 function findSliderArrow(direction) {
+  const bounds = getSizeSliderBounds();
+  if (!bounds) return null;
+
   const arrows = getVisibleElements("button, div, span").filter((el) => {
     const text = normalizeText(el.innerText);
     const rect = el.getBoundingClientRect();
 
-    const looksLikeArrow =
-      text === "→" ||
-      text === ">" ||
-      text.includes("arrow") ||
-      el.getAttribute("aria-label")?.toLowerCase().includes(direction);
+    if (direction === "right" && text !== "→") return false;
+    if (direction === "left" && text !== "←") return false;
 
-    if (!looksLikeArrow) return false;
-
-    if (direction === "right") {
-      return rect.left > window.innerWidth * 0.45;
-    }
-
-    return rect.left < window.innerWidth * 0.55;
+    return (
+      rect.top >= bounds.top &&
+      rect.bottom <= bounds.bottom
+    );
   });
 
-  return arrows[0] || null;
+  return direction === "right"
+    ? arrows.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0] || null
+    : arrows.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0] || null;
 }
 
 function findBestPriceOption() {
