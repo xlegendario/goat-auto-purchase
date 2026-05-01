@@ -356,7 +356,7 @@ async function selectSizeFromSlider(targetSize) {
 
   if (!clickCategoryInModal(modal, category)) return false;
   await sleep(500);
-
+  
   if (!clickPreferenceButtonInModal(modal, "US")) return false;
   await sleep(500);
 
@@ -455,41 +455,23 @@ function clickAt(x, y) {
 }
 
 function clickCategoryInModal(modal, category) {
-  const target = normalizeText(category);
+  const target = normalizeText(category); // "men", "women", "youth", "infant"
 
-  const buttons = Array.from(modal.querySelectorAll("button, div, span"))
-    .filter((el) => {
-      if (!isVisible(el)) return false;
-
+  const btn = Array.from(modal.querySelectorAll("button, [role='button'], div, span"))
+    .filter(isVisible)
+    .find((el) => {
       const text = normalizeText(el.innerText);
-      const rect = el.getBoundingClientRect();
-
-      return (
-        text === target &&
-        rect.top > modal.getBoundingClientRect().top &&
-        rect.top < modal.getBoundingClientRect().top + 180
-      );
-    })
-    .sort((a, b) => {
-      const ar = a.getBoundingClientRect();
-      const br = b.getBoundingClientRect();
-      return (ar.width * ar.height) - (br.width * br.height);
+      return text === target;
     });
-
-  const btn = buttons[0];
 
   if (!btn) {
     console.log("Category button not found in modal:", category);
-    console.log("Modal visible texts:", Array.from(modal.querySelectorAll("button, div, span"))
-      .filter(isVisible)
-      .map((el) => normalizeText(el.innerText))
-      .filter(Boolean)
-      .slice(0, 80)
-    );
+    console.log("Modal visible text:", modal.innerText);
     return false;
   }
 
-  clickElementAtCenter(btn);
+  console.log("Clicking category in modal:", category, btn.innerText);
+  clickElement(btn);
   return true;
 }
 
