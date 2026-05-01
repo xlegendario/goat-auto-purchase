@@ -350,18 +350,21 @@ async function selectSizeFromSlider(targetSize) {
 
   clickElementAtCenter(label);
 
-  const modal = await waitForPreferenceModal();
+  let modal = await waitForPreferenceModal();
   if (!modal) throw new Error("Size Preferences modal did not open");
 
   console.log("STEP 1 clicking category:", category);
-  if (!clickExactTextInModal(modal, category)) {
+  if (!clickExactTextInModal(modal, category, "category")) {
     throw new Error(`Category button not clicked: ${category}`);
   }
 
   await sleep(800);
 
   console.log("STEP 2 clicking US");
-  if (!clickExactTextInModal(modal, "US")) {
+  modal = await waitForPreferenceModal();
+  if (!modal) return false;
+  
+  if (!clickExactTextInModal(modal, "US", "chart")) {
     throw new Error("US button not clicked");
   }
 
@@ -384,70 +387,48 @@ async function selectSizeFromSlider(targetSize) {
   return true;
 }
 
-function clickExactTextInModal(modal, textValue) {
+function clickExactTextInModal(modal, textValue, group = "") {
   const target = normalizeText(textValue);
-  const modalRect = modal.getBoundingClientRect();
+  const rect = modal.getBoundingClientRect();
 
-  const rowMap = {
-    men: { heading: "what category do you shop for most often", index: 0 },
-    women: { heading: "what category do you shop for most often", index: 1 },
-    youth: { heading: "what category do you shop for most often", index: 2 },
-    infant: { heading: "what category do you shop for most often", index: 3 },
-
-    us: { heading: "what size chart do you prefer", index: 0 },
-    uk: { heading: "what size chart do you prefer", index: 1 },
-    eu: { heading: "what size chart do you prefer", index: 2 },
-    fr: { heading: "what size chart do you prefer", index: 3 },
-
-    save: { save: true }
+  const yByGroup = {
+    category: rect.top + rect.height * 0.285,
+    chart: rect.top + rect.height * 0.635,
+    size: rect.top + rect.height * 0.755
   };
 
-  if (rowMap[target]?.save) {
-    const x = modalRect.left + modalRect.width / 2;
-    const y = modalRect.bottom - 28;
-    console.log("Clicking SAVE fallback:", { x, y });
+  const xMaps = {
+    category: {
+      men: 0.20,
+      women: 0.39,
+      youth: 0.58,
+      infant: 0.78
+    },
+    chart: {
+      us: 0.18,
+      uk: 0.35,
+      eu: 0.52,
+      fr: 0.68
+    }
+  };
+
+  if (target === "save") {
+    clickAtPoint(rect.left + rect.width / 2, rect.bottom - 30);
+    return true;
+  }
+
+  if (xMaps[group]?.[target] !== undefined) {
+    const x = rect.left + rect.width * xMaps[group][target];
+    const y = yByGroup[group];
+
+    console.log("Clicking modal coordinate:", { group, textValue, x, y });
+
     clickAtPoint(x, y);
     return true;
   }
 
-  const config = rowMap[target];
-  if (!config) {
-    console.log("No fallback config for:", textValue);
-    return false;
-  }
-
-  const headingEl = Array.from(document.querySelectorAll("div, span, p"))
-    .filter(isVisible)
-    .find((el) => {
-      const r = el.getBoundingClientRect();
-      return (
-        r.left >= modalRect.left &&
-        r.right <= modalRect.right &&
-        r.top >= modalRect.top &&
-        r.bottom <= modalRect.bottom &&
-        normalizeText(el.innerText).includes(config.heading)
-      );
-    });
-
-  if (!headingEl) {
-    console.log("Fallback heading not found:", config.heading);
-    return false;
-  }
-
-  const hr = headingEl.getBoundingClientRect();
-
-  const xPositions = [0.14, 0.36, 0.58, 0.80];
-  const x = modalRect.left + modalRect.width * xPositions[config.index];
-  const y = hr.bottom + 28;
-
-  console.log("Clicking modal option fallback:", {
-    textValue,
-    x,
-    y
-  });
-
-  clickAtPoint(x, y);
-  return true;
+  console.log("No coordinate mapping found:", { group, textValue });
+  return false;
 }
 
 function clickAtPoint(x, y) {
