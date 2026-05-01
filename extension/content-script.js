@@ -426,40 +426,62 @@ function findLikelySizeArea() {
     })[0] || null;
 }
 
+function getSizeSliderBounds() {
+  const arrows = getVisibleElements("button, div, span").filter((el) => {
+    const text = normalizeText(el.innerText);
+    return text === "←" || text === "→";
+  });
+
+  const leftArrow = arrows.find((el) => normalizeText(el.innerText) === "←");
+  const rightArrow = arrows.find((el) => normalizeText(el.innerText) === "→");
+
+  if (!leftArrow || !rightArrow) return null;
+
+  const leftRect = leftArrow.getBoundingClientRect();
+  const rightRect = rightArrow.getBoundingClientRect();
+
+  return {
+    left: leftRect.right,
+    right: rightRect.left,
+    top: Math.min(leftRect.top, rightRect.top) - 40,
+    bottom: Math.max(leftRect.bottom, rightRect.bottom) + 80
+  };
+}
+
 function findVisibleSizeTiles() {
+  const bounds = getSizeSliderBounds();
+  if (!bounds) return [];
+
   return getVisibleElements("button, div, span").filter((el) => {
+    const rect = el.getBoundingClientRect();
     const raw = String(el.innerText || "").trim();
     const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
 
-    const rect = el.getBoundingClientRect();
+    const insideSlider =
+      rect.left >= bounds.left &&
+      rect.right <= bounds.right &&
+      rect.top >= bounds.top &&
+      rect.bottom <= bounds.bottom;
 
-    // echte size tile is compact
-    if (rect.width > 120 || rect.height > 90) return false;
-
-    // moet size + prijs bevatten
+    if (!insideSlider) return false;
+    if (rect.width > 90 || rect.height > 70) return false;
     if (!/€\s*\d+/.test(raw)) return false;
 
-    // eerste regel moet exact een size zijn
-    return lines.some((line) => normalizeSize(line) !== "");
+    return normalizeSize(lines[0]) !== "";
   });
 }
 
 function findSizeTile(normalizedTarget) {
   const tiles = findVisibleSizeTiles();
 
-  const exact = tiles.find((el) => {
+  return tiles.find((el) => {
     const lines = String(el.innerText || "")
       .split("\n")
       .map((line) => normalizeSize(line))
       .filter(Boolean);
 
     return lines[0] === normalizedTarget;
-  });
-
-  if (!exact) return null;
-
-  // klikbaarste parent zoeken, maar NIET te groot
-  return exact.closest("button") || exact;
+  }) || null;
 }
 
 function findSliderArrow(direction) {
