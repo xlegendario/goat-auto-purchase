@@ -354,7 +354,7 @@ async function selectSizeFromSlider(targetSize) {
     targetSize
   });
 
-  if (!clickPreferenceButtonInModal(modal, category)) return false;
+  if (!clickCategoryInModal(modal, category)) return false;
   await sleep(500);
 
   if (!clickPreferenceButtonInModal(modal, "US")) return false;
@@ -386,6 +386,45 @@ function getCategoryFromSizeLabel(labelText) {
   if (firstPart.includes("men")) return "Men";
 
   return null;
+}
+
+function clickCategoryInModal(modal, category) {
+  const target = normalizeText(category);
+
+  const buttons = Array.from(modal.querySelectorAll("button, div, span"))
+    .filter((el) => {
+      if (!isVisible(el)) return false;
+
+      const text = normalizeText(el.innerText);
+      const rect = el.getBoundingClientRect();
+
+      return (
+        text === target &&
+        rect.top > modal.getBoundingClientRect().top &&
+        rect.top < modal.getBoundingClientRect().top + 180
+      );
+    })
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (ar.width * ar.height) - (br.width * br.height);
+    });
+
+  const btn = buttons[0];
+
+  if (!btn) {
+    console.log("Category button not found in modal:", category);
+    console.log("Modal visible texts:", Array.from(modal.querySelectorAll("button, div, span"))
+      .filter(isVisible)
+      .map((el) => normalizeText(el.innerText))
+      .filter(Boolean)
+      .slice(0, 80)
+    );
+    return false;
+  }
+
+  clickElementAtCenter(btn);
+  return true;
 }
 
 async function waitForPreferenceModal() {
@@ -501,23 +540,6 @@ function findSizePreferenceLabel() {
 
     return (ar.width * ar.height) - (br.width * br.height);
   })[0] || null;
-}
-
-function clickExactPreferenceOption(value) {
-  const target = normalizeText(value);
-
-  const el = getVisibleElements("button, div, span").find((el) => {
-    const text = normalizeText(el.innerText);
-    return text === target;
-  });
-
-  if (!el) {
-    console.log("Preference option not found:", value);
-    return false;
-  }
-
-  clickElement(el);
-  return true;
 }
 
 function scrollPreferenceModalDown() {
