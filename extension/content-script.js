@@ -115,6 +115,17 @@ async function handleProductPage() {
     return;
   }
   
+  const resolvedData = await chrome.storage.local.get(["goatResolvedPreference"]);
+  const resolved = resolvedData.goatResolvedPreference;
+  
+  if (!resolved || resolved.recordId !== currentTask.recordId) {
+    await reportTaskResult("PURCHASE_FAILED", {
+      errorMessage: "Missing goatResolvedPreference after returning from preferences",
+      boughtSize: ""
+    });
+    return;
+  }
+  
   const targetSize = resolved.targetSize;
   
   console.log("Returned from preferences. Opening product size panel:", resolved);
