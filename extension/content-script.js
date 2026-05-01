@@ -388,6 +388,72 @@ function getCategoryFromSizeLabel(labelText) {
   return null;
 }
 
+function clickCategoryByCoordinates(modal, category) {
+  const rect = modal.getBoundingClientRect();
+
+  const positions = {
+    Men: 0.10,
+    Women: 0.27,
+    Youth: 0.45,
+    Infant: 0.62
+  };
+
+  const xRatio = positions[category];
+  if (xRatio === undefined) {
+    console.log("Unknown category:", category);
+    return false;
+  }
+
+  const x = rect.left + rect.width * xRatio;
+  const y = rect.top + 126; // rij Men/Women/Youth/Infant
+
+  console.log("Clicking category by coordinates:", { category, x, y });
+
+  clickAt(x, y);
+  return true;
+}
+
+function clickUSByCoordinates(modal) {
+  const rect = modal.getBoundingClientRect();
+
+  const x = rect.left + rect.width * 0.10;
+  const y = rect.top + 285; // US knop
+
+  console.log("Clicking US by coordinates:", { x, y });
+
+  clickAt(x, y);
+  return true;
+}
+
+function clickAt(x, y) {
+  const el = document.elementFromPoint(x, y) || document.body;
+
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    el.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      view: window
+    }));
+  }
+}
+function clickAt(x, y) {
+  const el = document.elementFromPoint(x, y) || document.body;
+
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    el.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      view: window
+    }));
+  }
+}
+
 function clickCategoryInModal(modal, category) {
   const target = normalizeText(category);
 
