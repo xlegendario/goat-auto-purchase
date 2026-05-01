@@ -325,6 +325,7 @@ async function detectGoatSizeType() {
     }
   }
 
+  await openSizePanel();
   const sizeTiles = findVisibleSizeTiles();
 
   for (const tile of sizeTiles.slice(0, 8)) {
@@ -372,6 +373,13 @@ function resolveTargetSize(sizeType, sizeMap) {
 }
 
 async function selectSizeFromSlider(targetSize) {
+  const opened = await openSizePanel();
+
+  if (!opened) {
+    console.log("Could not open GOAT size panel");
+    return false;
+  }
+
   const normalizedTarget = normalizeSize(targetSize);
 
   for (let attempt = 0; attempt < 30; attempt++) {
@@ -389,16 +397,11 @@ async function selectSizeFromSlider(targetSize) {
     const rightArrow = findSliderArrow("right");
 
     if (!rightArrow) {
-      console.log("Right slider arrow not found, trying horizontal wheel");
-      window.dispatchEvent(new WheelEvent("wheel", {
-        deltaX: 500,
-        deltaY: 0,
-        bubbles: true
-      }));
-    } else {
-      clickElement(rightArrow);
+      console.log("Right size-slider arrow not found");
+      return false;
     }
 
+    clickElement(rightArrow);
     await sleep(700);
   }
 
@@ -425,6 +428,36 @@ function findLikelySizeArea() {
       return br.width * br.height - ar.width * ar.height;
     })[0] || null;
 }
+
+async function openSizePanel() {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const sizeBar = getVisibleElements("div, footer, section").find((el) => {
+      const rect = el.getBoundingClientRect();
+      const raw = String(el.innerText || "");
+      const text = normalizeText(raw);
+
+      return (
+        rect.top > window.innerHeight * 0.75 &&
+        /€\s*\d+/.test(raw) &&
+        /\b\d+(\.5)?\b/.test(text)
+      );
+    });
+
+    if (sizeBar) {
+      moveMouseOver(sizeBar);
+      await sleep(700);
+    }
+
+    if (getSizeSliderBounds()) {
+      return true;
+    }
+
+    await sleep(500);
+  }
+
+  return false;
+}
+
 
 function getSizeSliderBounds() {
   const arrows = getVisibleElements("button, div, span").filter((el) => {
