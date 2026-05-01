@@ -351,7 +351,7 @@ async function detectGoatSizeType() {
     }
   }
 
-  return "US Men's Size";
+  throw new Error("Could not detect GOAT size type from size panel");
 }
 
 function resolveTargetSize(sizeType, sizeMap) {
@@ -430,14 +430,36 @@ function findLikelySizeArea() {
 }
 
 async function openSizePanel() {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    moveMouseAt(window.innerWidth / 2, window.innerHeight - 35);
-    await sleep(500);
+  const yPoints = [
+    window.innerHeight - 110,
+    window.innerHeight - 90,
+    window.innerHeight - 75,
+    window.innerHeight - 60
+  ];
 
-    if (getSizeSliderBounds()) {
-      console.log("GOAT size panel opened");
-      return true;
+  const xPoints = [
+    window.innerWidth * 0.35,
+    window.innerWidth * 0.45,
+    window.innerWidth * 0.55,
+    window.innerWidth * 0.65
+  ];
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    for (const y of yPoints) {
+      for (const x of xPoints) {
+        console.log("Trying GOAT hover point:", { x, y });
+
+        moveMouseAt(x, y);
+        await sleep(250);
+
+        if (getSizeSliderBounds()) {
+          console.log("GOAT size panel opened");
+          return true;
+        }
+      }
     }
+
+    await sleep(500);
   }
 
   return false;
@@ -746,25 +768,18 @@ function getVisibleElements(selector) {
 
 function moveMouseOver(el) {
   const rect = el.getBoundingClientRect();
-
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
-
-  el.dispatchEvent(new MouseEvent("mouseover", {
-    bubbles: true,
-    clientX: x,
-    clientY: y
-  }));
-
-  el.dispatchEvent(new MouseEvent("mousemove", {
-    bubbles: true,
-    clientX: x,
-    clientY: y
-  }));
+  moveMouseAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
 }
 
 function moveMouseAt(x, y) {
   const el = document.elementFromPoint(x, y) || document.body;
+
+  console.log("Mouse target element:", {
+    tag: el.tagName,
+    text: String(el.innerText || "").slice(0, 80),
+    x,
+    y
+  });
 
   for (const type of [
     "pointerover",
@@ -774,11 +789,15 @@ function moveMouseAt(x, y) {
     "pointermove",
     "mousemove"
   ]) {
-    el.dispatchEvent(new MouseEvent(type, {
+    el.dispatchEvent(new PointerEvent(type, {
       bubbles: true,
       cancelable: true,
+      composed: true,
       clientX: x,
       clientY: y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       view: window
     }));
   }
