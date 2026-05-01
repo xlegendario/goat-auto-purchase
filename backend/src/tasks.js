@@ -170,7 +170,7 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
   const sizeMap = buildSizeMap(sizeRow);
 
   await updateOrder(record.id, {
-    "GOAT LastAction": "PURCHASE_IN_PROGRESS"
+    "GOAT LastAction": STATUS.IN_PROGRESS,
     "GOAT ErrorMessage": ""
   });
 
