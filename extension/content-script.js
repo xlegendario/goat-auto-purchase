@@ -354,113 +354,123 @@ async function selectSizeFromSlider(targetSize) {
   if (!modal) throw new Error("Size Preferences modal did not open");
 
   console.log("STEP 1 clicking category:", category);
-  if (!clickPreferenceOptionByText(category)) {
-    throw new Error(`Category button not clicked: ${category}`);
-  }
-
-  await sleep(1000);
-
-  modal = await waitForPreferenceModal();
-  if (!modal) throw new Error("Modal disappeared after category click");
+  clickPreferenceCoordinate(category, "category");
+  await sleep(800);
 
   console.log("STEP 2 clicking US");
-  if (!clickPreferenceOptionByText("US")) {
-    throw new Error("US button not clicked");
-  }
-
-  await sleep(1000);
-
-  modal = await waitForPreferenceModal();
-  if (!modal) throw new Error("Modal disappeared after US click");
+  clickPreferenceCoordinate("US", "chart");
+  await sleep(800);
 
   console.log("STEP 3 clicking size:", targetSize);
-  if (!await clickPreferenceSizeWithScroll(String(targetSize))) {
+  const sizeOk = await clickPreferenceSizeByCoordinate(String(targetSize));
+  if (!sizeOk) {
     throw new Error(`Size button not clicked in preferences modal: ${targetSize}`);
   }
 
   await sleep(800);
 
-  modal = await waitForPreferenceModal();
-  if (!modal) throw new Error("Modal disappeared before SAVE");
-
   console.log("STEP 4 clicking SAVE");
-  if (!clickPreferenceOptionByText("SAVE")) {
-    throw new Error("SAVE button not clicked");
-  }
+  clickPreferenceCoordinate("SAVE", "save");
 
   await sleep(2000);
   return true;
 }
 
-function clickPreferenceOptionByText(textValue) {
-  const target = normalizeText(textValue);
-
+function clickPreferenceCoordinate(value, group) {
   const modal = findPreferenceModal();
-  if (!modal) {
-    console.log("No modal found while clicking:", textValue);
-    return false;
+  if (!modal) return false;
+
+  const rect = modal.getBoundingClientRect();
+  const target = normalizeText(value);
+
+  const xMaps = {
+    category: {
+      men: 0.10,
+      women: 0.28,
+      youth: 0.46,
+      infant: 0.63
+    },
+    chart: {
+      us: 0.09,
+      uk: 0.22,
+      eu: 0.35,
+      fr: 0.48
+    }
+  };
+
+  const yMaps = {
+    category: 0.295,
+    chart: 0.595,
+    save: 0.955
+  };
+
+  let x;
+  let y;
+
+  if (group === "save") {
+    x = rect.left + rect.width / 2;
+    y = rect.top + rect.height * yMaps.save;
+  } else {
+    x = rect.left + rect.width * xMaps[group][target];
+    y = rect.top + rect.height * yMaps[group];
   }
 
-  const modalRect = modal.getBoundingClientRect();
-
-  const candidates = getVisibleElements("button, [role='button'], div, span")
-    .filter((el) => {
-      const rect = el.getBoundingClientRect();
-      const text = normalizeText(el.innerText);
-
-      return (
-        text === target &&
-        rect.left >= modalRect.left &&
-        rect.right <= modalRect.right &&
-        rect.top >= modalRect.top &&
-        rect.bottom <= modalRect.bottom
-      );
-    })
-    .sort((a, b) => {
-      const ar = a.getBoundingClientRect();
-      const br = b.getBoundingClientRect();
-
-      // Kleinste element eerst, zodat we niet de hele modal/div klikken.
-      return (ar.width * ar.height) - (br.width * br.height);
-    });
-
-  const el = candidates[0];
-
-  if (!el) {
-    console.log("Preference option not found:", textValue);
-    console.log("Modal text:", modal.innerText);
-    return false;
-  }
-
-  const rect = el.getBoundingClientRect();
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
-
-  console.log("Clicking preference option:", {
-    textValue,
-    tag: el.tagName,
-    text: el.innerText,
-    x,
-    y
-  });
-
+  console.log("Clicking preference coordinate:", { value, group, x, y });
   clickAtPoint(x, y);
   return true;
 }
 
-async function clickPreferenceSizeWithScroll(sizeValue) {
-  const target = normalizeText(sizeValue);
+async function clickPreferenceSizeByCoordinate(sizeValue) {
+  const target = normalizeSize(sizeValue);
 
-  for (let i = 0; i < 12; i++) {
-    if (clickPreferenceOptionByText(target)) {
-      return true;
-    }
-
+  for (let attempt = 0; attempt < 10; attempt++) {
     const modal = findPreferenceModal();
     if (!modal) return false;
 
+    const rect = modal.getBoundingClientRect();
+
+    const visibleSizes = Array.from(modal.querySelectorAll("button, div, span"))
+      .filter(isVisible)
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        return {
+          el,
+          size: normalizeSize(el.innerText),
+          rect: r,
+          area: r.width * r.height
+        };
+      })
+      .filter((item) => {
+        return (
+          item.size === target &&
+          item.rect.left >= rect.left &&
+          item.rect.right <= rect.right &&
+          item.rect.top >= rect.top &&
+          item.rect.bottom <= rect.bottom &&
+          item.area > 0 &&
+          item.area < 5000
+        );
+      })
+      .sort((a, b) => a.area - b.area);
+
+    if (visibleSizes.length) {
+      const item = visibleSizes[0];
+      const x = item.rect.left + item.rect.width / 2;
+      const y = item.rect.top + item.rect.height / 2;
+
+      console.log("Clicking size element:", { sizeValue, x, y, text: item.el.innerText });
+      clickAtPoint(x, y);
+      return true;
+    }
+
+    console.log("Size not visible yet, scrolling modal:", target);
+
     modal.scrollTop += 120;
-    modal.dispatchEvent(new Event("scroll", { bubbles: true }));
+    modal.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 120
+    }));
 
     await sleep(300);
   }
@@ -471,13 +481,25 @@ async function clickPreferenceSizeWithScroll(sizeValue) {
 function clickAtPoint(x, y) {
   const el = document.elementFromPoint(x, y) || document.body;
 
+  console.log("ClickAtPoint target:", {
+    tag: el.tagName,
+    text: String(el.innerText || "").slice(0, 80),
+    x,
+    y
+  });
+
   for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-    el.dispatchEvent(new MouseEvent(type, {
+    const EventClass = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+
+    el.dispatchEvent(new EventClass(type, {
       bubbles: true,
       cancelable: true,
       composed: true,
       clientX: x,
       clientY: y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
       view: window
     }));
   }
@@ -1110,19 +1132,7 @@ function clickElementAtCenter(el) {
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
 
-  const target = document.elementFromPoint(x, y) || el;
-
-  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-    target.dispatchEvent(new MouseEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      clientX: x,
-      clientY: y,
-      view: window
-    }));
-  }
-
+  clickAtPoint(x, y);
   return true;
 }
 
