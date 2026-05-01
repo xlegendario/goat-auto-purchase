@@ -207,7 +207,7 @@ async function handlePreferencesPage() {
     return;
   }
 
-  const saveButton = findButtonByText("save");
+  const saveButton = findPreferenceSaveButton();
 
   if (!saveButton) {
     await reportTaskResult("PURCHASE_FAILED", {
@@ -229,6 +229,18 @@ async function handlePreferencesPage() {
   await sleep(2500);
 
   window.location.href = currentTask.goatUrl;
+}
+
+function findPreferenceSaveButton() {
+  const candidates = getVisibleElements("button, [role='button'], div, span")
+    .filter((el) => normalizeText(el.innerText) === "save")
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (ar.width * ar.height) - (br.width * br.height);
+    });
+
+  return candidates[0] || null;
 }
 
 function clickPreferencePageOption(value, headingText) {
@@ -695,27 +707,6 @@ function findPriceRowForSelectButton(button) {
   }
 
   return null;
-}
-
-function findSelectButtonInsideOrNear(row) {
-  const inside = Array.from(row.querySelectorAll("button")).find((btn) => {
-    return normalizeText(btn.innerText) === "select";
-  });
-
-  if (inside) return inside;
-
-  const rect = row.getBoundingClientRect();
-
-  return getVisibleElements("button").find((btn) => {
-    const text = normalizeText(btn.innerText);
-    const b = btn.getBoundingClientRect();
-
-    return (
-      text === "select" &&
-      Math.abs(b.top - rect.top) < 80 &&
-      b.left > rect.left
-    );
-  }) || null;
 }
 
 function verifyCheckoutProduct(normalizedPageText) {
