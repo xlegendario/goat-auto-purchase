@@ -430,29 +430,14 @@ function findLikelySizeArea() {
 }
 
 async function openSizePanel() {
-  for (let attempt = 0; attempt < 15; attempt++) {
-    const sizeBar = getVisibleElements("div, footer, section").find((el) => {
-      const rect = el.getBoundingClientRect();
-      const raw = String(el.innerText || "");
-      const text = normalizeText(raw);
-
-      return (
-        rect.top > window.innerHeight * 0.75 &&
-        /€\s*\d+/.test(raw) &&
-        /\b\d+(\.5)?\b/.test(text)
-      );
-    });
-
-    if (sizeBar) {
-      moveMouseOver(sizeBar);
-      await sleep(700);
-    }
+  for (let attempt = 0; attempt < 20; attempt++) {
+    moveMouseAt(window.innerWidth / 2, window.innerHeight - 35);
+    await sleep(500);
 
     if (getSizeSliderBounds()) {
+      console.log("GOAT size panel opened");
       return true;
     }
-
-    await sleep(500);
   }
 
   return false;
@@ -776,6 +761,27 @@ function moveMouseOver(el) {
     clientX: x,
     clientY: y
   }));
+}
+
+function moveMouseAt(x, y) {
+  const el = document.elementFromPoint(x, y) || document.body;
+
+  for (const type of [
+    "pointerover",
+    "pointerenter",
+    "mouseover",
+    "mouseenter",
+    "pointermove",
+    "mousemove"
+  ]) {
+    el.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      view: window
+    }));
+  }
 }
 
 function clickElement(el) {
