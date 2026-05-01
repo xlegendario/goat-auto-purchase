@@ -6,7 +6,13 @@ const router = express.Router();
 
 router.post("/tasks/next", async (req, res) => {
   try {
-    const task = await getNextTask();
+    const runnerName = req.body.runnerName;
+    const accountGroupKey = req.body.accountGroupKey || null;
+
+    const task = await getNextTask({
+      runnerName,
+      accountGroupKey
+    });
 
     res.json({
       ok: true,
