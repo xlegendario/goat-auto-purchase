@@ -333,50 +333,141 @@ async function selectSizeFromSlider(targetSize) {
   if (!opened) return false;
 
   const label = findSizePreferenceLabel();
-  if (!label) {
-    console.log("GOAT size preference label not found");
-    return false;
-  }
+  if (!label) return false;
 
-  const labelText = normalizeText(label.innerText);
-  let category = null;
-
-  if (labelText.includes("women")) category = "women";
-  else if (labelText.includes("youth")) category = "youth";
-  else if (labelText.includes("infant")) category = "infant";
-  else if (labelText.includes("men")) category = "men";
-
+  const category = getCategoryFromSizeLabel(label.innerText);
   if (!category) {
-    console.log("Could not detect GOAT category from label:", label.innerText);
+    console.log("Could not detect category from label:", label.innerText);
     return false;
   }
 
   clickElementAtCenter(label);
-  await sleep(700);
 
-  if (!clickExactPreferenceOption(category)) return false;
-  await sleep(300);
-
-  if (!clickExactPreferenceOption("us")) return false;
-  await sleep(300);
-
-  const sizeClicked = clickExactPreferenceOption(String(targetSize));
-  if (!sizeClicked) {
-    scrollPreferenceModalDown();
-    await sleep(300);
-
-    if (!clickExactPreferenceOption(String(targetSize))) return false;
+  const modal = await waitForPreferenceModal();
+  if (!modal) {
+    console.log("Size Preferences modal did not open");
+    return false;
   }
 
-  await sleep(300);
+  console.log("GOAT preference modal opened. Selecting:", {
+    category,
+    targetSize
+  });
 
-  const save = findButtonByText("save");
-  if (!save) return false;
+  if (!clickPreferenceButtonInModal(modal, category)) return false;
+  await sleep(500);
 
-  clickElement(save);
+  if (!clickPreferenceButtonInModal(modal, "US")) return false;
+  await sleep(500);
+
+  const sizeOk = await clickSizeInPreferenceModal(modal, String(targetSize));
+  if (!sizeOk) return false;
+
+  await sleep(500);
+
+  const save = findButtonInModal(modal, "save");
+  if (!save) {
+    console.log("Save button not found in Size Preferences modal");
+    return false;
+  }
+
+  clickElementAtCenter(save);
   await sleep(1500);
 
   return true;
+}
+
+function getCategoryFromSizeLabel(labelText) {
+  const firstPart = normalizeText(labelText).split("/")[0];
+
+  if (firstPart.includes("women")) return "Women";
+  if (firstPart.includes("youth")) return "Youth";
+  if (firstPart.includes("infant")) return "Infant";
+  if (firstPart.includes("men")) return "Men";
+
+  return null;
+}
+
+async function waitForPreferenceModal() {
+  for (let i = 0; i < 20; i++) {
+    const modal = findPreferenceModal();
+    if (modal) return modal;
+    await sleep(250);
+  }
+
+  return null;
+}
+
+function findPreferenceModal() {
+  return getVisibleElements("div").find((el) => {
+    const text = normalizeText(el.innerText);
+    const rect = el.getBoundingClientRect();
+
+    return (
+      text.includes("size preferences") &&
+      text.includes("what category do you shop for most often") &&
+      rect.width > 200 &&
+      rect.height > 200
+    );
+  }) || null;
+}
+
+function clickPreferenceButtonInModal(modal, value) {
+  const target = normalizeText(value);
+
+  const btn = Array.from(modal.querySelectorAll("button, div, span")).find((el) => {
+    return isVisible(el) && normalizeText(el.innerText) === target;
+  });
+
+  if (!btn) {
+    console.log("Preference button not found in modal:", value);
+    return false;
+  }
+
+  clickElementAtCenter(btn);
+  return true;
+}
+
+async function clickSizeInPreferenceModal(modal, targetSize) {
+  const target = normalizeSize(targetSize);
+
+  for (let i = 0; i < 12; i++) {
+    const sizeBtn = Array.from(modal.querySelectorAll("button, div, span")).find((el) => {
+      return isVisible(el) && normalizeSize(el.innerText) === target;
+    });
+
+    if (sizeBtn) {
+      clickElementAtCenter(sizeBtn);
+      return true;
+    }
+
+    modal.scrollTop += 160;
+    modal.dispatchEvent(new Event("scroll", { bubbles: true }));
+    await sleep(250);
+  }
+
+  console.log("Target size not found in preference modal:", targetSize);
+  return false;
+}
+
+function findButtonInModal(modal, textValue) {
+  const target = normalizeText(textValue);
+
+  return Array.from(modal.querySelectorAll("button, div, span")).find((el) => {
+    return isVisible(el) && normalizeText(el.innerText) === target;
+  }) || null;
+}
+
+function isVisible(el) {
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+
+  return (
+    style.visibility !== "hidden" &&
+    style.display !== "none" &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
 }
 
 function findSizePreferenceLabel() {
