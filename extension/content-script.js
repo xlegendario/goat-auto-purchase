@@ -100,19 +100,11 @@ async function handleProductPage() {
       }
     });
   
-    console.log("Going to GOAT preferences page every run:", {
-      sizeType,
-      category,
-      targetSize
-    });
-  
     window.location.href = "https://www.goat.com/account/preferences";
     return;
   }
   
   const targetSize = resolved.targetSize;
-  
-  console.log("Returned from preferences. Opening product size panel:", resolved);
 
   const opened = await openSizePanel();
 
