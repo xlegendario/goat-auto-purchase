@@ -85,8 +85,18 @@ async function handleProductPage() {
     targetSize
   });
 
-  const selected = await selectSizeFromSlider(targetSize);
+  let selected = false;
 
+  try {
+    selected = await selectSizeFromSlider(targetSize);
+  } catch (err) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: err.message,
+      boughtSize: ""
+    });
+    return;
+  }
+  
   if (!selected) {
     await reportTaskResult("SIZE_NOT_FOUND", {
       errorMessage: `GOAT size ${targetSize} not found in slider`,
@@ -330,50 +340,75 @@ function resolveTargetSize(sizeType, sizeMap) {
 
 async function selectSizeFromSlider(targetSize) {
   const opened = await openSizePanel();
-  if (!opened) return false;
+  if (!opened) throw new Error("Size panel not opened");
 
   const label = findSizePreferenceLabel();
-  if (!label) return false;
+  if (!label) throw new Error("Size preference label not found");
 
   const category = getCategoryFromSizeLabel(label.innerText);
-  if (!category) {
-    console.log("Could not detect category from label:", label.innerText);
-    return false;
-  }
+  if (!category) throw new Error(`Category not detected from label: ${label.innerText}`);
 
   clickElementAtCenter(label);
 
   const modal = await waitForPreferenceModal();
-  if (!modal) {
-    console.log("Size Preferences modal did not open");
-    return false;
+  if (!modal) throw new Error("Size Preferences modal did not open");
+
+  console.log("STEP 1 clicking category:", category);
+  if (!clickExactTextInModal(modal, category)) {
+    throw new Error(`Category button not clicked: ${category}`);
   }
 
-  console.log("GOAT preference modal opened. Selecting:", {
-    category,
-    targetSize
+  await sleep(800);
+
+  console.log("STEP 2 clicking US");
+  if (!clickExactTextInModal(modal, "US")) {
+    throw new Error("US button not clicked");
+  }
+
+  await sleep(800);
+
+  console.log("STEP 3 clicking size:", targetSize);
+  const sizeOk = await clickSizeInPreferenceModal(modal, String(targetSize));
+  if (!sizeOk) {
+    throw new Error(`Size button not clicked in preferences modal: ${targetSize}`);
+  }
+
+  await sleep(500);
+
+  console.log("STEP 4 clicking SAVE");
+  if (!clickExactTextInModal(modal, "SAVE")) {
+    throw new Error("SAVE button not clicked");
+  }
+
+  await sleep(1500);
+  return true;
+}
+
+function clickExactTextInModal(modal, textValue) {
+  const target = normalizeText(textValue);
+
+  const elements = Array.from(
+    modal.querySelectorAll("button, [role='button'], div, span, p")
+  ).filter(isVisible);
+
+  const candidates = elements.filter((el) => {
+    return normalizeText(el.innerText) === target;
   });
 
-  if (!clickCategoryInModal(modal, category)) return false;
-  await sleep(500);
-  
-  if (!clickPreferenceButtonInModal(modal, "US")) return false;
-  await sleep(500);
+  const smallest = candidates.sort((a, b) => {
+    const ar = a.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    return ar.width * ar.height - br.width * br.height;
+  })[0];
 
-  const sizeOk = await clickSizeInPreferenceModal(modal, String(targetSize));
-  if (!sizeOk) return false;
-
-  await sleep(500);
-
-  const save = findButtonInModal(modal, "save");
-  if (!save) {
-    console.log("Save button not found in Size Preferences modal");
+  if (!smallest) {
+    console.log("Exact text not found in modal:", textValue);
+    console.log("Available modal text:", modal.innerText);
     return false;
   }
 
-  clickElementAtCenter(save);
-  await sleep(1500);
-
+  console.log("Clicking exact modal text:", textValue, smallest);
+  clickElementAtCenter(smallest);
   return true;
 }
 
