@@ -13,8 +13,45 @@ function headers() {
   };
 }
 
-export async function fetchOrders() {
-  const url = new URL(`${BASE_URL}/${ORDERS_TABLE}`);
+function tableUrl(tableName) {
+  return `${BASE_URL}/${encodeURIComponent(tableName)}`;
+}
+
+function escapeFormulaValue(value) {
+  return String(value || "").replace(/'/g, "\\'");
+}
+
+async function fetchAllRecords(url) {
+  let allRecords = [];
+  let offset = null;
+
+  do {
+    const nextUrl = new URL(url.toString());
+
+    if (offset) {
+      nextUrl.searchParams.set("offset", offset);
+    }
+
+    const res = await fetch(nextUrl.toString(), {
+      method: "GET",
+      headers: headers()
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Airtable fetch failed: ${res.status} ${text}`);
+    }
+
+    const data = await res.json();
+    allRecords = allRecords.concat(data.records || []);
+    offset = data.offset || null;
+  } while (offset);
+
+  return allRecords;
+}
+
+export async function fetchGoatPurchaseCandidates() {
+  const url = new URL(tableUrl(ORDERS_TABLE));
 
   url.searchParams.set(
     "filterByFormula",
@@ -23,41 +60,41 @@ export async function fetchOrders() {
       {GOAT Purchase Status} = "GOAT_PURCHASE_NEEDED",
       {SKU} != "",
       {Size} != "",
-      {Maximum Buying Price} != ""
+      {Maximum Buying Price} != "",
+      {Merchant GOAT Auto Purchase Enabled} = 1
     )
-  `
+    `
   );
 
-  const res = await fetch(url.toString(), {
-    headers: headers()
-  });
-
-  const data = await res.json();
-  return data.records || [];
+  return await fetchAllRecords(url);
 }
 
 export async function fetchSizeRow(brand, euSize) {
-  const url = new URL(`${BASE_URL}/${SIZE_TABLE}`);
+  const url = new URL(tableUrl(SIZE_TABLE));
 
   url.searchParams.set(
     "filterByFormula",
-    `AND({Brand}='${brand}', {EU Size}='${euSize}')`
+    `AND(
+      {Brand} = '${escapeFormulaValue(brand)}',
+      {EU Size} = '${escapeFormulaValue(euSize)}'
+    )`
   );
 
-  const res = await fetch(url.toString(), {
-    headers: headers()
-  });
-
-  const data = await res.json();
-  return data.records?.[0] || null;
+  const records = await fetchAllRecords(url);
+  return records[0] || null;
 }
 
 export async function updateOrder(recordId, fields) {
-  const res = await fetch(`${BASE_URL}/${ORDERS_TABLE}/${recordId}`, {
+  const res = await fetch(`${tableUrl(ORDERS_TABLE)}/${recordId}`, {
     method: "PATCH",
     headers: headers(),
     body: JSON.stringify({ fields })
   });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Airtable update failed: ${res.status} ${text}`);
+  }
 
   return await res.json();
 }
