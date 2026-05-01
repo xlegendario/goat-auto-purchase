@@ -351,7 +351,7 @@ async function selectSizeFromSlider(targetSize) {
     return false;
   }
 
-  clickElement(label);
+  clickElementAtCenter(label);
   await sleep(700);
 
   if (!clickExactPreferenceOption(category)) return false;
@@ -380,19 +380,36 @@ async function selectSizeFromSlider(targetSize) {
 }
 
 function findSizePreferenceLabel() {
-  return getVisibleElements("button, div, span").find((el) => {
+  const wanted = [
+    "us women's size",
+    "us womens size",
+    "us men's size",
+    "us mens size",
+    "us youth size",
+    "us infant size"
+  ];
+
+  const matches = getVisibleElements("button, div, span").filter((el) => {
     const text = normalizeText(el.innerText);
+    const rect = el.getBoundingClientRect();
+
     return (
-      text.includes("us ") &&
-      text.includes("size") &&
-      (
-        text.includes("women") ||
-        text.includes("men") ||
-        text.includes("youth") ||
-        text.includes("infant")
-      )
+      wanted.some((phrase) => text.includes(phrase)) &&
+      rect.top > window.innerHeight * 0.35 &&
+      rect.top < window.innerHeight * 0.8 &&
+      rect.width > 40 &&
+      rect.width < 400 &&
+      rect.height > 10 &&
+      rect.height < 80
     );
-  }) || null;
+  });
+
+  return matches.sort((a, b) => {
+    const ar = a.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+
+    return (ar.width * ar.height) - (br.width * br.height);
+  })[0] || null;
 }
 
 function clickExactPreferenceOption(value) {
