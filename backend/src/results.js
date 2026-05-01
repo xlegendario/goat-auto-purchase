@@ -35,7 +35,6 @@ export async function submitTaskResult(recordId, payload) {
   const now = new Date().toISOString();
 
   const fields = {
-    "GOAT Purchase Status": status,
     "GOAT LastAction": status,
     "GOAT Final Price": moneyOrNull(payload.finalPrice),
     "GOAT Bought Size": textOrEmpty(payload.boughtSize),
