@@ -54,6 +54,11 @@ async function runGoatFlow() {
     return;
   }
 
+  if (window.location.pathname.includes("/account/preferences")) {
+    await handlePreferencesPage();
+    return;
+  }
+
   if (!window.location.pathname.includes("/sneakers/")) {
     window.location.href = currentTask.goatUrl;
     return;
@@ -69,38 +74,52 @@ async function handleProductPage() {
 
   await verifyProductOrFail();
 
-  const sizeType = await detectGoatSizeType();
-  const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
+  const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
+  const resolved = prefData.goatResolvedPreference;
 
-  if (!targetSize) {
-    await reportTaskResult("SIZE_NOT_FOUND", {
-      errorMessage: `No target US size found for GOAT size type "${sizeType}"`,
-      boughtSize: ""
+  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.saved !== true) {
+    const sizeType = await detectGoatSizeType();
+    const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
+    const category = sizeTypeToCategory(sizeType);
+
+    if (!targetSize || !category) {
+      await reportTaskResult("SIZE_NOT_FOUND", {
+        errorMessage: `Could not resolve GOAT preference. sizeType=${sizeType}, targetSize=${targetSize}`,
+        boughtSize: ""
+      });
+      return;
+    }
+
+    await chrome.storage.local.set({
+      goatResolvedPreference: {
+        recordId: currentTask.recordId,
+        sizeType,
+        category,
+        targetSize,
+        saved: false
+      }
     });
+
+    console.log("Resolved GOAT preference, going to preferences page:", {
+      sizeType,
+      category,
+      targetSize
+    });
+
+    window.location.href = "https://www.goat.com/account/preferences";
     return;
   }
 
-  console.log("Resolved GOAT target size:", {
-    sizeType,
-    targetSize
-  });
+  const targetSize = resolved.targetSize;
 
-  let selected = false;
+  console.log("Preferences already saved. Opening product size panel:", resolved);
 
-  try {
-    selected = await selectSizeFromSlider(targetSize);
-  } catch (err) {
+  const opened = await openSizePanel();
+
+  if (!opened) {
     await reportTaskResult("SIZE_NOT_FOUND", {
-      errorMessage: err.message,
-      boughtSize: ""
-    });
-    return;
-  }
-
-  if (!selected) {
-    await reportTaskResult("SIZE_NOT_FOUND", {
-      errorMessage: `GOAT size ${targetSize} not found in slider`,
-      boughtSize: ""
+      errorMessage: "Could not open GOAT size panel after preferences save",
+      boughtSize: targetSize
     });
     return;
   }
@@ -117,11 +136,6 @@ async function handleProductPage() {
     return;
   }
 
-  console.log("Best price row detected:", {
-    price: bestPrice.price,
-    text: bestPrice.row.innerText
-  });
-
   const estimatedTotal = bestPrice.price + 15;
 
   if (estimatedTotal > Number(currentTask.maxBuyingPrice)) {
@@ -132,8 +146,6 @@ async function handleProductPage() {
     });
     return;
   }
-
-  console.log("Selecting Best Price option:", bestPrice);
 
   clickElement(bestPrice.selectButton);
 
@@ -149,10 +161,165 @@ async function handleProductPage() {
   });
 
   await sleep(4000);
+}
 
-  if (!window.location.pathname.includes("/checkout")) {
-    console.log("Waiting for checkout navigation...");
+async function handlePreferencesPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("preferences page")) return;
+
+  const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
+  const resolved = prefData.goatResolvedPreference;
+
+  if (!resolved || resolved.recordId !== currentTask.recordId) {
+    window.location.href = currentTask.goatUrl;
+    return;
   }
+
+  console.log("Setting GOAT account preferences:", resolved);
+
+  const categoryOk = clickPreferencePageOption(
+    resolved.category,
+    "what category do you shop for most often"
+  );
+
+  await sleep(700);
+
+  const usOk = clickPreferencePageOption(
+    "US",
+    "what size chart do you prefer"
+  );
+
+  await sleep(700);
+
+  const sizeOk = clickPreferencePageOption(
+    resolved.targetSize,
+    "which size fits you best"
+  );
+
+  await sleep(700);
+
+  if (!categoryOk || !usOk || !sizeOk) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `Could not set preferences. category=${categoryOk}, US=${usOk}, size=${sizeOk}`,
+      boughtSize: resolved.targetSize
+    });
+    return;
+  }
+
+  const saveButton = findButtonByText("save");
+
+  if (!saveButton) {
+    await reportTaskResult("PURCHASE_FAILED", {
+      errorMessage: "SAVE button not found on GOAT preferences page",
+      boughtSize: resolved.targetSize
+    });
+    return;
+  }
+
+  clickElement(saveButton);
+
+  await chrome.storage.local.set({
+    goatResolvedPreference: {
+      ...resolved,
+      saved: true
+    }
+  });
+
+  await sleep(2500);
+
+  window.location.href = currentTask.goatUrl;
+}
+
+function clickPreferencePageOption(value, headingText) {
+  const section = findPreferenceSection(headingText);
+
+  if (!section) {
+    console.log("Preference section not found:", headingText);
+    return false;
+  }
+
+  const targetText = normalizeText(value);
+  const targetSize = normalizeSize(value);
+
+  const candidates = Array.from(section.querySelectorAll("button, label, div, span"))
+    .filter(isVisible)
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+
+      return {
+        el,
+        text: normalizeText(el.innerText),
+        size: normalizeSize(el.innerText),
+        area: rect.width * rect.height
+      };
+    })
+    .filter((item) => {
+      if (targetSize) return item.size === targetSize && item.area < 5000;
+      return item.text === targetText && item.area < 5000;
+    })
+    .sort((a, b) => a.area - b.area);
+
+  if (!candidates.length) {
+    console.log("Preference option not found:", { value, headingText });
+    return false;
+  }
+
+  console.log("Clicking preference option:", {
+    value,
+    headingText,
+    text: candidates[0].el.innerText
+  });
+
+  clickElementAtCenter(candidates[0].el);
+  return true;
+}
+
+function findPreferenceSection(headingText) {
+  const target = normalizeText(headingText);
+
+  const headings = getVisibleElements("div, p, span, h1, h2, h3, h4")
+    .filter((el) => normalizeText(el.innerText).includes(target))
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.top - br.top;
+    });
+
+  const heading = headings[0];
+  if (!heading) return null;
+
+  let el = heading;
+
+  for (let i = 0; i < 6; i++) {
+    if (!el?.parentElement) break;
+
+    const text = normalizeText(el.parentElement.innerText);
+
+    if (
+      text.includes(target) &&
+      (
+        text.includes("men") ||
+        text.includes("women") ||
+        text.includes("us") ||
+        /\b\d+(\.5)?\b/.test(text)
+      )
+    ) {
+      return el.parentElement;
+    }
+
+    el = el.parentElement;
+  }
+
+  return heading.parentElement;
+}
+
+function sizeTypeToCategory(sizeType) {
+  if (sizeType === "US Women's Size") return "Women";
+  if (sizeType === "US Youth Size") return "Youth";
+  if (sizeType === "US Infant Size") return "Infant";
+  if (sizeType === "US Men's Size") return "Men";
+  return null;
 }
 
 async function handleCheckoutPage() {
@@ -338,146 +505,6 @@ function resolveTargetSize(sizeType, sizeMap) {
   return cleanSize(sizeMap.usSize);
 }
 
-async function selectSizeFromSlider(targetSize) {
-  const opened = await openSizePanel();
-  if (!opened) throw new Error("Size panel not opened");
-
-  const label = findSizePreferenceLabel();
-  if (!label) throw new Error("Size preference label not found");
-
-  const category = getCategoryFromSizeLabel(label.innerText);
-  if (!category) throw new Error(`Category not detected from label: ${label.innerText}`);
-
-  clickElementAtCenter(label);
-
-  let modal = await waitForPreferenceModal();
-  if (!modal) throw new Error("Size Preferences modal did not open");
-
-  console.log("STEP 1 clicking category:", category);
-  clickPreferenceCoordinate(category, "category");
-  await sleep(800);
-
-  console.log("STEP 2 clicking US");
-  clickPreferenceCoordinate("US", "chart");
-  await sleep(800);
-
-  console.log("STEP 3 clicking size:", targetSize);
-  const sizeOk = await clickPreferenceSizeByCoordinate(String(targetSize));
-  if (!sizeOk) {
-    throw new Error(`Size button not clicked in preferences modal: ${targetSize}`);
-  }
-
-  await sleep(800);
-
-  console.log("STEP 4 clicking SAVE");
-  clickPreferenceCoordinate("SAVE", "save");
-
-  await sleep(2000);
-  return true;
-}
-
-function clickPreferenceCoordinate(value, group) {
-  const modal = findPreferenceModal();
-  if (!modal) return false;
-
-  const rect = modal.getBoundingClientRect();
-  const target = normalizeText(value);
-
-  const xMaps = {
-    category: {
-      men: 0.10,
-      women: 0.28,
-      youth: 0.46,
-      infant: 0.63
-    },
-    chart: {
-      us: 0.095,
-      uk: 0.215,
-      eu: 0.335,
-      fr: 0.455
-    }
-  };
-  
-  const yMaps = {
-    category: 0.31,
-    chart: 0.69,
-    save: 0.955
-  };
-
-  let x;
-  let y;
-
-  if (group === "save") {
-    x = rect.left + rect.width / 2;
-    y = rect.top + rect.height * yMaps.save;
-  } else {
-    x = rect.left + rect.width * xMaps[group][target];
-    y = rect.top + rect.height * yMaps[group];
-  }
-
-  console.log("Clicking preference coordinate:", { value, group, x, y });
-  clickAtPoint(x, y);
-  return true;
-}
-
-async function clickPreferenceSizeByCoordinate(sizeValue) {
-  const target = normalizeSize(sizeValue);
-
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const modal = findPreferenceModal();
-    if (!modal) return false;
-
-    const rect = modal.getBoundingClientRect();
-
-    const visibleSizes = Array.from(modal.querySelectorAll("button, div, span"))
-      .filter(isVisible)
-      .map((el) => {
-        const r = el.getBoundingClientRect();
-        return {
-          el,
-          size: normalizeSize(el.innerText),
-          rect: r,
-          area: r.width * r.height
-        };
-      })
-      .filter((item) => {
-        return (
-          item.size === target &&
-          item.rect.left >= rect.left &&
-          item.rect.right <= rect.right &&
-          item.rect.top >= rect.top &&
-          item.rect.bottom <= rect.bottom &&
-          item.area > 0 &&
-          item.area < 5000
-        );
-      })
-      .sort((a, b) => a.area - b.area);
-
-    if (visibleSizes.length) {
-      const item = visibleSizes[0];
-      const x = item.rect.left + item.rect.width / 2;
-      const y = item.rect.top + item.rect.height / 2;
-
-      console.log("Clicking size element:", { sizeValue, x, y, text: item.el.innerText });
-      clickAtPoint(x, y);
-      return true;
-    }
-
-    console.log("Size not visible yet, scrolling modal:", target);
-
-    modal.scrollTop += 120;
-    modal.dispatchEvent(new WheelEvent("wheel", {
-      bubbles: true,
-      cancelable: true,
-      deltaY: 120
-    }));
-
-    await sleep(300);
-  }
-
-  return false;
-}
-
 function clickAtPoint(x, y) {
   const el = document.elementFromPoint(x, y) || document.body;
 
@@ -507,137 +534,6 @@ function clickAtPoint(x, y) {
   if (typeof el.click === "function") {
     el.click();
   }
-}
-
-
-function getCategoryFromSizeLabel(labelText) {
-  const firstPart = normalizeText(labelText).split("/")[0];
-
-  if (firstPart.includes("women")) return "Women";
-  if (firstPart.includes("youth")) return "Youth";
-  if (firstPart.includes("infant")) return "Infant";
-  if (firstPart.includes("men")) return "Men";
-
-  return null;
-}
-
-function clickCategoryInModal(modal, category) {
-  return clickOptionUnderHeading(
-    modal,
-    "what category do you shop for most often",
-    category
-  );
-}
-
-async function waitForPreferenceModal() {
-  for (let i = 0; i < 20; i++) {
-    const modal = findPreferenceModal();
-    if (modal) return modal;
-    await sleep(250);
-  }
-
-  return null;
-}
-
-function findPreferenceModal() {
-  const modals = getVisibleElements("div").filter((el) => {
-    const text = normalizeText(el.innerText);
-    const rect = el.getBoundingClientRect();
-
-    return (
-      text.includes("size preferences") &&
-      text.includes("what category do you shop for most often") &&
-      text.includes("what size chart do you prefer") &&
-      rect.width >= 250 &&
-      rect.width <= 700 &&
-      rect.height >= 300 &&
-      rect.height <= window.innerHeight
-    );
-  });
-
-  return modals.sort((a, b) => {
-    const ar = a.getBoundingClientRect();
-    const br = b.getBoundingClientRect();
-    return (ar.width * ar.height) - (br.width * br.height);
-  })[0] || null;
-}
-
-function clickPreferenceButtonInModal(modal, value) {
-  return clickOptionUnderHeading(
-    modal,
-    "what size chart do you prefer",
-    value
-  );
-}
-
-function clickOptionUnderHeading(modal, headingText, optionText) {
-  const headingTarget = normalizeText(headingText);
-  const optionTarget = normalizeText(optionText);
-
-  const heading = Array.from(modal.querySelectorAll("div, span, p")).find((el) => {
-    return isVisible(el) && normalizeText(el.innerText).includes(headingTarget);
-  });
-
-  if (!heading) {
-    console.log("Heading not found:", headingText);
-    console.log("Modal text:", modal.innerText);
-    return false;
-  }
-
-  const headingRect = heading.getBoundingClientRect();
-
-  const option = Array.from(modal.querySelectorAll("button, [role='button'], div, span"))
-    .filter(isVisible)
-    .find((el) => {
-      const rect = el.getBoundingClientRect();
-      const text = normalizeText(el.innerText);
-
-      return (
-        text === optionTarget &&
-        rect.top > headingRect.bottom &&
-        rect.top < headingRect.bottom + 140
-      );
-    });
-
-  if (!option) {
-    console.log("Option not found:", optionText);
-    console.log("Modal text:", modal.innerText);
-    return false;
-  }
-
-  console.log("Clicking option:", optionText);
-  clickElementAtCenter(option);
-  return true;
-}
-
-async function clickSizeInPreferenceModal(modal, targetSize) {
-  const target = normalizeSize(targetSize);
-
-  for (let i = 0; i < 12; i++) {
-    const sizeBtn = Array.from(modal.querySelectorAll("button, div, span")).find((el) => {
-      return isVisible(el) && normalizeSize(el.innerText) === target;
-    });
-
-    if (sizeBtn) {
-      clickElementAtCenter(sizeBtn);
-      return true;
-    }
-
-    modal.scrollTop += 160;
-    modal.dispatchEvent(new Event("scroll", { bubbles: true }));
-    await sleep(250);
-  }
-
-  console.log("Target size not found in preference modal:", targetSize);
-  return false;
-}
-
-function findButtonInModal(modal, textValue) {
-  const target = normalizeText(textValue);
-
-  return Array.from(modal.querySelectorAll("button, div, span")).find((el) => {
-    return isVisible(el) && normalizeText(el.innerText) === target;
-  }) || null;
 }
 
 function isVisible(el) {
@@ -683,39 +579,6 @@ function findSizePreferenceLabel() {
 
     return (ar.width * ar.height) - (br.width * br.height);
   })[0] || null;
-}
-
-function scrollPreferenceModalDown() {
-  const modal = getVisibleElements("div").find((el) => {
-    const text = normalizeText(el.innerText);
-    return text.includes("size preferences") && text.includes("save");
-  });
-
-  if (modal) {
-    modal.scrollTop = modal.scrollHeight;
-    modal.dispatchEvent(new Event("scroll", { bubbles: true }));
-  }
-}
-
-function findLikelySizeArea() {
-  const candidates = getVisibleElements("div, section, footer");
-
-  return candidates
-    .filter((el) => {
-      const text = normalizeText(el.innerText);
-      const rect = el.getBoundingClientRect();
-
-      return (
-        rect.top > window.innerHeight * 0.55 &&
-        text.includes("€") &&
-        /\b\d+(\.5)?\b/.test(text)
-      );
-    })
-    .sort((a, b) => {
-      const ar = a.getBoundingClientRect();
-      const br = b.getBoundingClientRect();
-      return br.width * br.height - ar.width * ar.height;
-    })[0] || null;
 }
 
 async function openSizePanel() {
@@ -782,60 +645,6 @@ function getSizeSliderBounds() {
     top: Math.min(...rects.map((r) => r.top)) - 50,
     bottom: Math.max(...rects.map((r) => r.bottom)) + 50
   };
-}
-
-function findVisibleSizeTiles() {
-  const bounds = getSizeSliderBounds();
-  if (!bounds) return [];
-
-  return getVisibleElements("button, div, span").filter((el) => {
-    const rect = el.getBoundingClientRect();
-    const raw = String(el.innerText || "").trim();
-    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
-
-    const insideSlider =
-      rect.left >= bounds.left &&
-      rect.right <= bounds.right &&
-      rect.top >= bounds.top &&
-      rect.bottom <= bounds.bottom;
-
-    if (!insideSlider) return false;
-    if (rect.width > 90 || rect.height > 70) return false;
-    if (!/€\s*\d+/.test(raw)) return false;
-
-    return normalizeSize(lines[0]) !== "";
-  });
-}
-
-function findSizeTile(normalizedTarget) {
-  const tiles = findVisibleSizeTiles();
-
-  return tiles.find((el) => {
-    const lines = String(el.innerText || "")
-      .split("\n")
-      .map((line) => normalizeSize(line))
-      .filter(Boolean);
-
-    return lines[0] === normalizedTarget;
-  }) || null;
-}
-
-function findSliderArrow(direction) {
-  const bounds = getSizeSliderBounds();
-  if (!bounds) return null;
-
-  const targetText = direction === "left" ? "←" : "→";
-
-  return getVisibleElements("button, div, span").find((el) => {
-    const text = normalizeText(el.innerText);
-    const rect = el.getBoundingClientRect();
-
-    return (
-      text === targetText &&
-      rect.top >= bounds.top &&
-      rect.bottom <= bounds.bottom
-    );
-  }) || null;
 }
 
 function findBestPriceOption() {
@@ -1055,11 +864,6 @@ function getVisibleElements(selector) {
       rect.height > 0
     );
   });
-}
-
-function moveMouseOver(el) {
-  const rect = el.getBoundingClientRect();
-  moveMouseAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
 }
 
 function moveMouseAt(x, y) {
