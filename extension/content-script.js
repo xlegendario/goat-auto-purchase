@@ -467,40 +467,31 @@ async function openSizePanel() {
 
 
 function getSizeSliderBounds() {
-  const arrows = getVisibleElements("button, div, span").filter((el) => {
-    const text = normalizeText(el.innerText);
+  const tileCandidates = getVisibleElements("button, div, span").filter((el) => {
     const rect = el.getBoundingClientRect();
+    const raw = String(el.innerText || "").trim();
+    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
 
     return (
-      (text === "←" || text === "→") &&
       rect.top > window.innerHeight * 0.55 &&
-      rect.top < window.innerHeight * 0.9
+      rect.top < window.innerHeight * 0.9 &&
+      rect.width <= 100 &&
+      rect.height <= 80 &&
+      lines.length >= 2 &&
+      /\b\d+(\.5)?\b/.test(lines[0]) &&
+      /€\s*\d+/.test(raw)
     );
   });
 
-  const leftArrow = arrows
-    .filter((el) => normalizeText(el.innerText) === "←")
-    .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0];
+  if (!tileCandidates.length) return null;
 
-  const rightArrow = arrows
-    .filter((el) => normalizeText(el.innerText) === "→")
-    .sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0];
-
-  if (!leftArrow || !rightArrow) return null;
-
-  const leftRect = leftArrow.getBoundingClientRect();
-  const rightRect = rightArrow.getBoundingClientRect();
-
-  console.log("GOAT size arrows found:", {
-    left: leftRect,
-    right: rightRect
-  });
+  const rects = tileCandidates.map((el) => el.getBoundingClientRect());
 
   return {
-    left: leftRect.right,
-    right: rightRect.left,
-    top: Math.min(leftRect.top, rightRect.top) - 50,
-    bottom: Math.max(leftRect.bottom, rightRect.bottom) + 90
+    left: Math.min(...rects.map((r) => r.left)) - 80,
+    right: Math.max(...rects.map((r) => r.right)) + 80,
+    top: Math.min(...rects.map((r) => r.top)) - 50,
+    bottom: Math.max(...rects.map((r) => r.bottom)) + 50
   };
 }
 
@@ -541,8 +532,17 @@ function findSizeTile(normalizedTarget) {
 }
 
 function findSliderArrow(direction) {
-  const bounds = getSizeSliderBounds();
-  if (!bounds) return null;
+  const sizeTiles = findVisibleSizeTiles();
+
+  if (!sizeTiles.length) {
+    console.log("No visible size tiles, cannot find size arrow");
+    return null;
+  }
+
+  const tileRects = sizeTiles.map((el) => el.getBoundingClientRect());
+
+  const minTop = Math.min(...tileRects.map((r) => r.top)) - 30;
+  const maxBottom = Math.max(...tileRects.map((r) => r.bottom)) + 30;
 
   const arrows = getVisibleElements("button, div, span").filter((el) => {
     const text = normalizeText(el.innerText);
@@ -552,14 +552,21 @@ function findSliderArrow(direction) {
     if (direction === "left" && text !== "←") return false;
 
     return (
-      rect.top >= bounds.top &&
-      rect.bottom <= bounds.bottom
+      rect.top >= minTop &&
+      rect.bottom <= maxBottom
     );
   });
 
-  return direction === "right"
-    ? arrows.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0] || null
-    : arrows.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0] || null;
+  console.log("Size-slider arrows near tiles:", arrows.map((el) => ({
+    text: el.innerText,
+    rect: el.getBoundingClientRect()
+  })));
+
+  if (direction === "right") {
+    return arrows.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0] || null;
+  }
+
+  return arrows.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0] || null;
 }
 
 function findBestPriceOption() {
