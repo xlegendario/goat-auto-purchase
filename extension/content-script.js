@@ -48,11 +48,6 @@ async function runGoatFlow() {
   if (await stopIfNeeded("start")) return;
 
   console.log("Starting GOAT purchase flow:", currentTask);
-  const marker = await chrome.storage.local.get(["lastGoatPreferenceTask"]);
-  if (marker.lastGoatPreferenceTask !== currentTask.recordId) {
-    await chrome.storage.local.remove(["goatPreferenceSetForProduct", "goatResolvedPreference"]);
-    await chrome.storage.local.set({ lastGoatPreferenceTask: currentTask.recordId });
-  }
 
   if (window.location.pathname.includes("/checkout")) {
     await handleCheckoutPage();
@@ -79,10 +74,10 @@ async function handleProductPage() {
 
   await verifyProductOrFail();
 
-  const prefData = await chrome.storage.local.get(["goatPreferenceSetForProduct"]);
-  const alreadyReturned = prefData.goatPreferenceSetForProduct === currentTask.recordId;
+  const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
+  const resolved = prefData.goatResolvedPreference;
   
-  if (!alreadyReturned) {
+  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.returnedFromPreferences !== true) {
     const sizeType = await detectGoatSizeType();
     const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
     const category = sizeTypeToCategory(sizeType);
@@ -112,17 +107,6 @@ async function handleProductPage() {
     });
   
     window.location.href = "https://www.goat.com/account/preferences";
-    return;
-  }
-  
-  const resolvedData = await chrome.storage.local.get(["goatResolvedPreference"]);
-  const resolved = resolvedData.goatResolvedPreference;
-  
-  if (!resolved || resolved.recordId !== currentTask.recordId) {
-    await reportTaskResult("PURCHASE_FAILED", {
-      errorMessage: "Missing goatResolvedPreference after returning from preferences",
-      boughtSize: ""
-    });
     return;
   }
   
@@ -236,7 +220,10 @@ async function handlePreferencesPage() {
   clickElement(saveButton);
 
   await chrome.storage.local.set({
-    goatPreferenceSetForProduct: currentTask.recordId
+    goatResolvedPreference: {
+      ...resolved,
+      returnedFromPreferences: true
+    }
   });
 
   await sleep(2500);
