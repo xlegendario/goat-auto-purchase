@@ -869,6 +869,29 @@ function clickElement(el) {
   return true;
 }
 
+function clickElementAtCenter(el) {
+  if (!el) return false;
+
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+
+  const target = document.elementFromPoint(x, y) || el;
+
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    target.dispatchEvent(new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      view: window
+    }));
+  }
+
+  return true;
+}
+
 async function reportTaskResult(status, extra = {}) {
   const payload = {
     recordId: currentTask.recordId,
