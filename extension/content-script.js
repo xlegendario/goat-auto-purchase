@@ -374,7 +374,7 @@ async function selectSizeFromSlider(targetSize) {
   if (!modal) throw new Error("Modal disappeared after US click");
 
   console.log("STEP 3 clicking size:", targetSize);
-  if (!clickPreferenceOptionByText(String(targetSize))) {
+  if (!await clickPreferenceSizeWithScroll(String(targetSize))) {
     throw new Error(`Size button not clicked in preferences modal: ${targetSize}`);
   }
 
@@ -446,6 +446,26 @@ function clickPreferenceOptionByText(textValue) {
 
   clickAtPoint(x, y);
   return true;
+}
+
+async function clickPreferenceSizeWithScroll(sizeValue) {
+  const target = normalizeText(sizeValue);
+
+  for (let i = 0; i < 12; i++) {
+    if (clickPreferenceOptionByText(target)) {
+      return true;
+    }
+
+    const modal = findPreferenceModal();
+    if (!modal) return false;
+
+    modal.scrollTop += 120;
+    modal.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    await sleep(300);
+  }
+
+  return false;
 }
 
 function clickAtPoint(x, y) {
