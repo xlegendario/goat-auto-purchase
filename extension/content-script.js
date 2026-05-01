@@ -391,16 +391,16 @@ function clickPreferenceCoordinate(value, group) {
       infant: 0.63
     },
     chart: {
-      us: 0.09,
+      us: 0.10,
       uk: 0.22,
       eu: 0.35,
       fr: 0.48
     }
   };
-
+  
   const yMaps = {
     category: 0.295,
-    chart: 0.595,
+    chart: 0.525,
     save: 0.955
   };
 
