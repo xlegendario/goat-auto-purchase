@@ -290,68 +290,24 @@ function getProductName() {
 async function detectGoatSizeType() {
   console.log("Detecting GOAT size type...");
 
-  const sliderArea = findLikelySizeArea();
-
-  if (sliderArea) {
-    moveMouseOver(sliderArea);
-    await sleep(800);
+  const opened = await openSizePanel();
+  if (!opened) {
+    throw new Error("Could not open GOAT size panel");
   }
 
-  const candidates = getVisibleElements("button, div, span");
-
-  for (const el of candidates) {
-    const text = normalizeText(el.innerText);
-
-    if (
-      text.includes("us women's size") ||
-      text.includes("us womens size")
-    ) {
-      return "US Women's Size";
-    }
-
-    if (text.includes("us men's size") || text.includes("us mens size")) {
-      return "US Men's Size";
-    }
-
-    if (text.includes("us youth size")) {
-      return "US Youth Size";
-    }
-
-    if (
-      text.includes("us infant size") ||
-      text.includes("us infant sizes")
-    ) {
-      return "US Infant Size";
-    }
+  const label = findSizePreferenceLabel();
+  if (!label) {
+    throw new Error("Could not find GOAT size preference label");
   }
 
-  await openSizePanel();
-  const sizeTiles = findVisibleSizeTiles();
+  const text = normalizeText(label.innerText);
 
-  for (const tile of sizeTiles.slice(0, 8)) {
-    moveMouseOver(tile);
-    await sleep(400);
+  if (text.includes("women")) return "US Women's Size";
+  if (text.includes("youth")) return "US Youth Size";
+  if (text.includes("infant")) return "US Infant Size";
+  if (text.includes("men")) return "US Men's Size";
 
-    const bodyText = normalizeText(document.body.innerText || "");
-
-    if (bodyText.includes("us women's size") || bodyText.includes("us womens size")) {
-      return "US Women's Size";
-    }
-
-    if (bodyText.includes("us men's size") || bodyText.includes("us mens size")) {
-      return "US Men's Size";
-    }
-
-    if (bodyText.includes("us youth size")) {
-      return "US Youth Size";
-    }
-
-    if (bodyText.includes("us infant size") || bodyText.includes("us infant sizes")) {
-      return "US Infant Size";
-    }
-  }
-
-  throw new Error("Could not detect GOAT size type from size panel");
+  throw new Error(`Could not detect GOAT size type from label: ${label.innerText}`);
 }
 
 function resolveTargetSize(sizeType, sizeMap) {
@@ -374,62 +330,100 @@ function resolveTargetSize(sizeType, sizeMap) {
 
 async function selectSizeFromSlider(targetSize) {
   const opened = await openSizePanel();
+  if (!opened) return false;
 
-  if (!opened) {
-    console.log("Could not open GOAT size panel");
+  const label = findSizePreferenceLabel();
+  if (!label) {
+    console.log("GOAT size preference label not found");
     return false;
   }
 
-  const normalizedTarget = Number(normalizeSize(targetSize));
+  const labelText = normalizeText(label.innerText);
+  let category = null;
 
-  for (let attempt = 0; attempt < 30; attempt++) {
-    if (await stopIfNeeded("size slider")) return false;
+  if (labelText.includes("women")) category = "women";
+  else if (labelText.includes("youth")) category = "youth";
+  else if (labelText.includes("infant")) category = "infant";
+  else if (labelText.includes("men")) category = "men";
 
-    const tiles = findVisibleSizeTiles();
-    const parsedTiles = tiles
-      .map((el) => ({
-        el,
-        size: Number(normalizeSize(String(el.innerText || "").split("\n")[0]))
-      }))
-      .filter((x) => Number.isFinite(x.size));
-
-    console.log("Visible GOAT sizes:", parsedTiles.map((x) => x.size));
-
-    const exact = parsedTiles.find((x) => x.size === normalizedTarget);
-
-    if (exact) {
-      console.log("Clicking exact GOAT size tile:", exact.el.innerText);
-      clickElement(exact.el);
-      await sleep(1500);
-      return true;
-    }
-
-    if (!parsedTiles.length) return false;
-
-    const minVisible = Math.min(...parsedTiles.map((x) => x.size));
-    const maxVisible = Math.max(...parsedTiles.map((x) => x.size));
-
-    let arrow = null;
-
-    if (normalizedTarget < minVisible) {
-      arrow = findSliderArrow("left");
-      console.log("Target is left of visible sizes, clicking left arrow");
-    } else if (normalizedTarget > maxVisible) {
-      arrow = findSliderArrow("right");
-      console.log("Target is right of visible sizes, clicking right arrow");
-    } else {
-      console.log("Target should be visible but exact tile not found");
-      return false;
-    }
-
-    if (!arrow) return false;
-
-    clickElement(arrow);
-    await sleep(900);
+  if (!category) {
+    console.log("Could not detect GOAT category from label:", label.innerText);
+    return false;
   }
 
-  return false;
+  clickElement(label);
+  await sleep(700);
+
+  if (!clickExactPreferenceOption(category)) return false;
+  await sleep(300);
+
+  if (!clickExactPreferenceOption("us")) return false;
+  await sleep(300);
+
+  const sizeClicked = clickExactPreferenceOption(String(targetSize));
+  if (!sizeClicked) {
+    scrollPreferenceModalDown();
+    await sleep(300);
+
+    if (!clickExactPreferenceOption(String(targetSize))) return false;
+  }
+
+  await sleep(300);
+
+  const save = findButtonByText("save");
+  if (!save) return false;
+
+  clickElement(save);
+  await sleep(1500);
+
+  return true;
 }
+
+function findSizePreferenceLabel() {
+  return getVisibleElements("button, div, span").find((el) => {
+    const text = normalizeText(el.innerText);
+    return (
+      text.includes("us ") &&
+      text.includes("size") &&
+      (
+        text.includes("women") ||
+        text.includes("men") ||
+        text.includes("youth") ||
+        text.includes("infant")
+      )
+    );
+  }) || null;
+}
+
+function clickExactPreferenceOption(value) {
+  const target = normalizeText(value);
+
+  const el = getVisibleElements("button, div, span").find((el) => {
+    const text = normalizeText(el.innerText);
+    return text === target;
+  });
+
+  if (!el) {
+    console.log("Preference option not found:", value);
+    return false;
+  }
+
+  clickElement(el);
+  return true;
+}
+
+function scrollPreferenceModalDown() {
+  const modal = getVisibleElements("div").find((el) => {
+    const text = normalizeText(el.innerText);
+    return text.includes("size preferences") && text.includes("save");
+  });
+
+  if (modal) {
+    modal.scrollTop = modal.scrollHeight;
+    modal.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+}
+
 function findLikelySizeArea() {
   const candidates = getVisibleElements("div, section, footer");
 
