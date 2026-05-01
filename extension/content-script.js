@@ -730,12 +730,26 @@ function verifyCheckoutSize(rawText, boughtSize) {
 
   if (!size) return false;
 
-  return (
-    normalized.includes(`size: us ${size}`) ||
-    normalized.includes(`size us ${size}`) ||
-    normalized.includes(`size: ${size}`) ||
-    normalized.includes(`size ${size}`)
-  );
+  const patterns = [
+    `size: us ${size}`,
+    `size us ${size}`,
+    `size: ${size}`,
+    `size ${size}`,
+    `size: us women's ${size}`,
+    `size us women's ${size}`,
+    `size: us womens ${size}`,
+    `size us womens ${size}`,
+    `size: us men's ${size}`,
+    `size us men's ${size}`,
+    `size: us mens ${size}`,
+    `size us mens ${size}`,
+    `size: us youth ${size}`,
+    `size us youth ${size}`,
+    `size: us infant ${size}`,
+    `size us infant ${size}`
+  ];
+
+  return patterns.some((pattern) => normalized.includes(pattern));
 }
 
 function verifyAddress(expectedAddress) {
