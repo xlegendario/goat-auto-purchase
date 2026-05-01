@@ -389,23 +389,11 @@ function getCategoryFromSizeLabel(labelText) {
 }
 
 function clickCategoryInModal(modal, category) {
-  const target = normalizeText(category);
-
-  const candidates = Array.from(modal.querySelectorAll("button, [role='button']"))
-    .filter(isVisible)
-    .filter((el) => normalizeText(el.innerText) === target);
-
-  const btn = candidates[0];
-
-  if (!btn) {
-    console.log("Category button not found in modal:", category);
-    console.log("Modal visible text:", modal.innerText);
-    return false;
-  }
-
-  console.log("Clicking category in modal:", category, btn.innerText);
-  clickElementAtCenter(btn);
-  return true;
+  return clickOptionUnderHeading(
+    modal,
+    "what category do you shop for most often",
+    category
+  );
 }
 
 async function waitForPreferenceModal() {
@@ -419,32 +407,79 @@ async function waitForPreferenceModal() {
 }
 
 function findPreferenceModal() {
-  return getVisibleElements("div").find((el) => {
+  const modals = getVisibleElements("div").filter((el) => {
     const text = normalizeText(el.innerText);
     const rect = el.getBoundingClientRect();
 
     return (
       text.includes("size preferences") &&
       text.includes("what category do you shop for most often") &&
-      rect.width > 200 &&
-      rect.height > 200
+      text.includes("what size chart do you prefer") &&
+      rect.width >= 250 &&
+      rect.width <= 700 &&
+      rect.height >= 300 &&
+      rect.height <= window.innerHeight
     );
-  }) || null;
+  });
+
+  return modals.sort((a, b) => {
+    const ar = a.getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    return (ar.width * ar.height) - (br.width * br.height);
+  })[0] || null;
 }
 
 function clickPreferenceButtonInModal(modal, value) {
-  const target = normalizeText(value);
+  return clickOptionUnderHeading(
+    modal,
+    "what size chart do you prefer",
+    value
+  );
+}
 
-  const btn = Array.from(modal.querySelectorAll("button, div, span")).find((el) => {
-    return isVisible(el) && normalizeText(el.innerText) === target;
+function clickOptionUnderHeading(modal, headingText, optionText) {
+  const modalRect = modal.getBoundingClientRect();
+  const headingTarget = normalizeText(headingText);
+  const optionTarget = normalizeText(optionText);
+
+  const heading = getVisibleElements("div, span, p").find((el) => {
+    const rect = el.getBoundingClientRect();
+    return (
+      rect.left >= modalRect.left &&
+      rect.right <= modalRect.right &&
+      rect.top >= modalRect.top &&
+      rect.bottom <= modalRect.bottom &&
+      normalizeText(el.innerText).includes(headingTarget)
+    );
   });
 
-  if (!btn) {
-    console.log("Preference button not found in modal:", value);
+  if (!heading) {
+    console.log("Heading not found:", headingText);
     return false;
   }
 
-  clickElementAtCenter(btn);
+  const headingRect = heading.getBoundingClientRect();
+
+  const option = getVisibleElements("button, [role='button'], div, span").find((el) => {
+    const rect = el.getBoundingClientRect();
+    const text = normalizeText(el.innerText);
+
+    return (
+      text === optionTarget &&
+      rect.left >= modalRect.left &&
+      rect.right <= modalRect.right &&
+      rect.top > headingRect.bottom &&
+      rect.top < headingRect.bottom + 120
+    );
+  });
+
+  if (!option) {
+    console.log("Option not found:", optionText);
+    return false;
+  }
+
+  console.log("Clicking option:", optionText);
+  clickElementAtCenter(option);
   return true;
 }
 
