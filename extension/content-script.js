@@ -107,6 +107,11 @@ async function handleProductPage() {
     return;
   }
 
+  console.log("Best price row detected:", {
+    price: bestPrice.price,
+    text: bestPrice.row.innerText
+  });
+
   const estimatedTotal = bestPrice.price + 15;
 
   if (estimatedTotal > Number(currentTask.maxBuyingPrice)) {
@@ -471,26 +476,50 @@ function findSliderArrow(direction) {
 }
 
 function findBestPriceOption() {
-  const candidates = getVisibleElements("div, button, section, article").filter((el) => {
-    const text = normalizeText(el.innerText);
-
-    if (!text.includes("best price") && !text.includes("under retail")) return false;
-    if (text.includes("instant")) return false;
-
-    return /€\s*\d+/.test(el.innerText || "");
+  const buttons = getVisibleElements("button").filter((btn) => {
+    return normalizeText(btn.innerText) === "select";
   });
 
-  for (const row of candidates) {
-    const price = extractFirstEuroPrice(row.innerText);
-    const selectButton = findSelectButtonInsideOrNear(row);
+  for (const button of buttons) {
+    const row = findPriceRowForSelectButton(button);
+    if (!row) continue;
 
-    if (Number.isFinite(price) && selectButton) {
+    const text = normalizeText(row.innerText);
+
+    if (!text.includes("best price") && !text.includes("under retail")) continue;
+    if (text.includes("instant")) continue;
+
+    const price = extractFirstEuroPrice(row.innerText);
+
+    if (Number.isFinite(price)) {
       return {
         price,
         row,
-        selectButton
+        selectButton: button
       };
     }
+  }
+
+  return null;
+}
+
+function findPriceRowForSelectButton(button) {
+  let el = button;
+
+  for (let i = 0; i < 6; i++) {
+    if (!el) return null;
+
+    const text = normalizeText(el.innerText || "");
+    const raw = el.innerText || "";
+
+    if (
+      /€\s*\d+/.test(raw) &&
+      (text.includes("best price") || text.includes("under retail") || text.includes("instant"))
+    ) {
+      return el;
+    }
+
+    el = el.parentElement;
   }
 
   return null;
