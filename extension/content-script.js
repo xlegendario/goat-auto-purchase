@@ -49,6 +49,15 @@ async function runGoatFlow() {
 
   console.log("Starting GOAT purchase flow:", currentTask);
 
+  const marker = await chrome.storage.local.get(["lastGoatPreferenceTask"]);
+
+  if (marker.lastGoatPreferenceTask !== currentTask.recordId) {
+    await chrome.storage.local.remove(["goatResolvedPreference", "goatPendingCheckout"]);
+    await chrome.storage.local.set({
+      lastGoatPreferenceTask: currentTask.recordId
+    });
+  }
+
   if (window.location.pathname.includes("/checkout")) {
     await handleCheckoutPage();
     return;
