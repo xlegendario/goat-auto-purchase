@@ -428,28 +428,38 @@ function findLikelySizeArea() {
 
 function findVisibleSizeTiles() {
   return getVisibleElements("button, div, span").filter((el) => {
-    const text = normalizeText(el.innerText);
-    const raw = el.innerText || "";
+    const raw = String(el.innerText || "").trim();
+    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
 
-    return (
-      /\b\d+(\.5)?\b/.test(text) &&
-      /€\s*\d+/.test(raw) &&
-      text.length < 80
-    );
+    const rect = el.getBoundingClientRect();
+
+    // echte size tile is compact
+    if (rect.width > 120 || rect.height > 90) return false;
+
+    // moet size + prijs bevatten
+    if (!/€\s*\d+/.test(raw)) return false;
+
+    // eerste regel moet exact een size zijn
+    return lines.some((line) => normalizeSize(line) !== "");
   });
 }
 
 function findSizeTile(normalizedTarget) {
   const tiles = findVisibleSizeTiles();
 
-  return tiles.find((el) => {
+  const exact = tiles.find((el) => {
     const lines = String(el.innerText || "")
       .split("\n")
       .map((line) => normalizeSize(line))
       .filter(Boolean);
 
-    return lines.includes(normalizedTarget);
-  }) || null;
+    return lines[0] === normalizedTarget;
+  });
+
+  if (!exact) return null;
+
+  // klikbaarste parent zoeken, maar NIET te groot
+  return exact.closest("button") || exact;
 }
 
 function findSliderArrow(direction) {
@@ -770,13 +780,13 @@ function normalizeText(value) {
 }
 
 function normalizeSize(value) {
-  return String(value || "")
+  const text = String(value || "")
     .trim()
     .toLowerCase()
-    .replace("us", "")
-    .replace("size", "")
-    .replace(",", ".")
-    .replace(/[^\d.]/g, "");
+    .replace(",", ".");
+
+  const match = text.match(/\b\d+(\.5)?\b/);
+  return match ? match[0] : "";
 }
 
 function cleanSize(value) {
