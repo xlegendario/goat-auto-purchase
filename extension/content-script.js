@@ -74,14 +74,15 @@ async function handleProductPage() {
 
   await verifyProductOrFail();
 
-  const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
-  const resolved = prefData.goatResolvedPreference;
-  
-  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.stage !== "RETURNED_FROM_PREFERENCES") {
+  const state = await chrome.storage.local.get(["goatBuyReady", "goatResolvedPreference"]);
+  const buyReady = state.goatBuyReady === true;
+  const resolved = state.goatResolvedPreference;
+
+  if (!buyReady) {
     const sizeType = await detectGoatSizeType();
     const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
     const category = sizeTypeToCategory(sizeType);
-  
+
     if (!targetSize || !category) {
       await reportTaskResult("SIZE_NOT_FOUND", {
         errorMessage: `Could not resolve GOAT preference. sizeType=${sizeType}, targetSize=${targetSize}`,
@@ -89,25 +90,41 @@ async function handleProductPage() {
       });
       return;
     }
-  
+
     await chrome.storage.local.set({
+      goatBuyReady: false,
       goatResolvedPreference: {
-        recordId: currentTask.recordId,
         sizeType,
         category,
-        targetSize,
-        stage: "GO_TO_PREFERENCES"
+        targetSize
       }
     });
-  
+
+    console.log("ALWAYS going to preferences before buying:", {
+      sizeType,
+      category,
+      targetSize
+    });
+
     window.location.href = "https://www.goat.com/account/preferences";
     return;
   }
-  
+
+  if (!resolved?.targetSize) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+    window.location.href = currentTask.goatUrl;
+    return;
+  }
+
   const targetSize = resolved.targetSize;
+
+  console.log("Preferences just set. Now opening size panel and buying:", resolved);
+
   const opened = await openSizePanel();
 
   if (!opened) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
     await reportTaskResult("SIZE_NOT_FOUND", {
       errorMessage: "Could not open GOAT size panel after preferences save",
       boughtSize: targetSize
@@ -120,6 +137,8 @@ async function handleProductPage() {
   const bestPrice = findBestPriceOption();
 
   if (!bestPrice) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
     await reportTaskResult("NO_VALID_PRICE", {
       errorMessage: "Best Price / Under Retail option not found",
       boughtSize: targetSize
@@ -130,6 +149,8 @@ async function handleProductPage() {
   const estimatedTotal = bestPrice.price + 15;
 
   if (estimatedTotal > Number(currentTask.maxBuyingPrice)) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
     await reportTaskResult("NO_VALID_PRICE", {
       errorMessage: `Best Price ${bestPrice.price} + shipping 15 = ${estimatedTotal} exceeds max ${currentTask.maxBuyingPrice}`,
       finalPrice: estimatedTotal,
@@ -137,8 +158,6 @@ async function handleProductPage() {
     });
     return;
   }
-
-  clickElement(bestPrice.selectButton);
 
   await chrome.storage.local.set({
     goatPendingCheckout: {
@@ -151,6 +170,10 @@ async function handleProductPage() {
     }
   });
 
+  await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
+  clickElement(bestPrice.selectButton);
+
   await sleep(4000);
 }
 
@@ -162,7 +185,7 @@ async function handlePreferencesPage() {
   const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
   const resolved = prefData.goatResolvedPreference;
 
-  if (!resolved || resolved.recordId !== currentTask.recordId) {
+  if (!resolved?.category || !resolved?.targetSize) {
     window.location.href = currentTask.goatUrl;
     return;
   }
@@ -211,9 +234,11 @@ async function handlePreferencesPage() {
   clickElement(saveButton);
 
   await chrome.storage.local.set({
+    goatBuyReady: true,
     goatResolvedPreference: {
-      ...resolved,
-      stage: "RETURNED_FROM_PREFERENCES"
+      sizeType: resolved.sizeType,
+      category: resolved.category,
+      targetSize: resolved.targetSize
     }
   });
 
