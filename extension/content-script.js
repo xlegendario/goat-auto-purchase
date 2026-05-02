@@ -49,15 +49,6 @@ async function runGoatFlow() {
 
   console.log("Starting GOAT purchase flow:", currentTask);
 
-  const marker = await chrome.storage.local.get(["lastGoatPreferenceTask"]);
-
-  if (marker.lastGoatPreferenceTask !== currentTask.recordId) {
-    await chrome.storage.local.remove(["goatResolvedPreference", "goatPendingCheckout"]);
-    await chrome.storage.local.set({
-      lastGoatPreferenceTask: currentTask.recordId
-    });
-  }
-
   if (window.location.pathname.includes("/checkout")) {
     await handleCheckoutPage();
     return;
@@ -86,7 +77,7 @@ async function handleProductPage() {
   const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
   const resolved = prefData.goatResolvedPreference;
   
-  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.returnedFromPreferences !== true) {
+  if (!resolved || resolved.recordId !== currentTask.recordId || resolved.stage !== "RETURNED_FROM_PREFERENCES") {
     const sizeType = await detectGoatSizeType();
     const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
     const category = sizeTypeToCategory(sizeType);
@@ -105,7 +96,7 @@ async function handleProductPage() {
         sizeType,
         category,
         targetSize,
-        returnedFromPreferences: false
+        stage: "GO_TO_PREFERENCES"
       }
     });
   
@@ -114,7 +105,6 @@ async function handleProductPage() {
   }
   
   const targetSize = resolved.targetSize;
-
   const opened = await openSizePanel();
 
   if (!opened) {
@@ -223,7 +213,7 @@ async function handlePreferencesPage() {
   await chrome.storage.local.set({
     goatResolvedPreference: {
       ...resolved,
-      returnedFromPreferences: true
+      stage: "RETURNED_FROM_PREFERENCES"
     }
   });
 
