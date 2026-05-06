@@ -437,68 +437,55 @@ async function handleGoatOrderSyncPage() {
 }
 
 function extractGoatTrackingFromOrderPage() {
-  const links = Array.from(document.querySelectorAll("a[href]"))
-    .filter(isVisible)
-    .map((a) => ({
-      text: String(a.innerText || "").trim(),
-      href: a.href
-    }));
+  const all = getVisibleElements("div, span, p, a");
 
-  const trackingLink = links.find((item) => {
-    if (!item.text) return false;
-
-    const text = normalizeText(item.text);
-    const href = normalizeText(item.href);
-
-    if (text.includes("currently unavailable")) return false;
-
-    return (
-      looksLikeTrackingNumber(item.text) ||
-      href.includes("tracking") ||
-      href.includes("track") ||
-      href.includes("ups") ||
-      href.includes("dhl") ||
-      href.includes("fedex") ||
-      href.includes("dpd") ||
-      href.includes("gls") ||
-      href.includes("postnl")
-    );
+  const trackingLabel = all.find((el) => {
+    return normalizeText(el.innerText) === "tracking";
   });
 
-  if (trackingLink) {
-    return {
-      trackingNumber: trackingLink.text,
-      trackingUrl: trackingLink.href
-    };
+  if (!trackingLabel) {
+    return { trackingNumber: "", trackingUrl: "" };
   }
 
-  const lines = String(document.body.innerText || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const labelRect = trackingLabel.getBoundingClientRect();
 
-  const trackingIndex = lines.findIndex((line) => {
-    return normalizeText(line) === "tracking";
-  });
+  const candidates = getVisibleElements("a")
+    .map((a) => {
+      const rect = a.getBoundingClientRect();
+      const text = String(a.innerText || "").trim();
+      const href = a.href || "";
 
-  if (trackingIndex >= 0) {
-    const candidate = lines[trackingIndex + 1] || "";
+      return { a, rect, text, href };
+    })
+    .filter((item) => {
+      const normalizedText = normalizeText(item.text);
 
-    if (
-      candidate &&
-      !normalizeText(candidate).includes("currently unavailable") &&
-      looksLikeTrackingNumber(candidate)
-    ) {
-      return {
-        trackingNumber: candidate,
-        trackingUrl: ""
-      };
-    }
+      return (
+        item.text.length >= 8 &&
+        /^[A-Z0-9]+$/i.test(item.text.replace(/\s+/g, "")) &&
+        !["editorial", "home", "search", "orders", "wants", "offers"].includes(normalizedText) &&
+        item.rect.top > labelRect.top - 10 &&
+        item.rect.top < labelRect.top + 40 &&
+        item.rect.left > labelRect.left + 100 &&
+        item.href &&
+        !item.href.includes("/editorial") &&
+        !item.href.includes("/account/") &&
+        !item.href.includes("/sneakers/")
+      );
+    })
+    .sort((a, b) => {
+      const da = Math.abs(a.rect.top - labelRect.top);
+      const db = Math.abs(b.rect.top - labelRect.top);
+      return da - db;
+    });
+
+  if (!candidates.length) {
+    return { trackingNumber: "", trackingUrl: "" };
   }
 
   return {
-    trackingNumber: "",
-    trackingUrl: ""
+    trackingNumber: candidates[0].text.replace(/\s+/g, ""),
+    trackingUrl: candidates[0].href
   };
 }
 
