@@ -42,7 +42,11 @@ export async function submitTaskResult(recordId, payload) {
   };
 
   if (status === STATUS.PURCHASED) {
-    fields["GOAT Purchased At"] = now;
+    fields["GOAT Purchased At"] = payload.purchasedAt || now;
+  
+    if (payload.goatOrderNumber) {
+      fields["GOAT Tracking Number"] = textOrEmpty(payload.goatOrderNumber);
+    }
   }
 
   return await updateOrder(recordId, fields);
