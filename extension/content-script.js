@@ -49,6 +49,11 @@ async function runGoatFlow() {
 
   console.log("Starting GOAT purchase flow:", currentTask);
 
+  if (window.location.pathname.includes("/checkout/") && window.location.pathname.includes("/success")) {
+    await handleGoatSuccessPage();
+    return;
+  }
+
   if (window.location.pathname.includes("/checkout")) {
     await handleCheckoutPage();
     return;
@@ -347,6 +352,43 @@ function sizeTypeToCategory(sizeType) {
   if (sizeType === "US Youth Size") return "Youth";
   if (sizeType === "US Infant Size") return "Infant";
   if (sizeType === "US Men's Size") return "Men";
+  return null;
+}
+
+async function handleGoatSuccessPage() {
+  await waitForPageReady();
+
+  const pending = await getPendingCheckout();
+  const boughtSize = pending?.boughtSize || "";
+
+  const orderNumber = extractGoatOrderNumber();
+
+  if (!orderNumber) {
+    await reportTaskResult("PURCHASED", {
+      boughtSize,
+      errorMessage: "Purchase success page reached, but GOAT order number not found"
+    });
+    return;
+  }
+
+  await reportTaskResult("PURCHASED", {
+    boughtSize,
+    goatOrderNumber: orderNumber,
+    goatTrackingNumber: orderNumber,
+    purchasedAt: new Date().toISOString(),
+    errorMessage: ""
+  });
+}
+
+function extractGoatOrderNumber() {
+  const text = document.body.innerText || "";
+
+  const match = text.match(/Order\s*#\s*(\d+)/i);
+  if (match?.[1]) return match[1];
+
+  const urlMatch = window.location.pathname.match(/checkout\/(\d+)\/success/i);
+  if (urlMatch?.[1]) return urlMatch[1];
+
   return null;
 }
 
@@ -967,7 +1009,10 @@ async function reportTaskResult(status, extra = {}) {
     status,
     finalPrice: extra.finalPrice ?? null,
     boughtSize: extra.boughtSize ?? "",
-    errorMessage: extra.errorMessage || ""
+    errorMessage: extra.errorMessage || "",
+    goatOrderNumber: extra.goatOrderNumber || "",
+    goatTrackingNumber: extra.goatTrackingNumber || "",
+    purchasedAt: extra.purchasedAt || ""
   };
 
   console.log("Reporting GOAT task result:", payload);
