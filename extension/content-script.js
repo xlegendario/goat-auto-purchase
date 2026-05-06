@@ -417,13 +417,15 @@ async function handleGoatOrderSyncPage() {
     return;
   }
 
-  await sleep(1500);
+  await sleep(2000);
 
   const tracking = extractGoatTrackingFromOrderPage();
 
-  if (!tracking.trackingNumber) {
+  console.log("GOAT tracking extracted:", tracking);
+
+  if (!tracking.trackingNumber || !tracking.trackingUrl) {
     await reportTaskResult("ORDER_NOT_READY", {
-      errorMessage: `GOAT order ${orderNumber} has no tracking yet`
+      errorMessage: `GOAT order ${orderNumber} has no tracking URL yet`
     });
     return;
   }
@@ -437,9 +439,9 @@ async function handleGoatOrderSyncPage() {
 }
 
 function extractGoatTrackingFromOrderPage() {
-  const all = getVisibleElements("div, span, p, a");
+  const visible = getVisibleElements("div, span, p, a");
 
-  const trackingLabel = all.find((el) => {
+  const trackingLabel = visible.find((el) => {
     return normalizeText(el.innerText) === "tracking";
   });
 
@@ -449,43 +451,49 @@ function extractGoatTrackingFromOrderPage() {
 
   const labelRect = trackingLabel.getBoundingClientRect();
 
-  const candidates = getVisibleElements("a")
-    .map((a) => {
-      const rect = a.getBoundingClientRect();
-      const text = String(a.innerText || "").trim();
-      const href = a.href || "";
+  const candidates = visible
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = String(el.innerText || "").trim().replace(/\s+/g, "");
+      const anchor = el.closest("a");
+      const href = anchor?.href || "";
 
-      return { a, rect, text, href };
+      return { el, rect, text, href };
     })
     .filter((item) => {
-      const normalizedText = normalizeText(item.text);
-
       return (
-        item.text.length >= 8 &&
-        /^[A-Z0-9]+$/i.test(item.text.replace(/\s+/g, "")) &&
-        !["editorial", "home", "search", "orders", "wants", "offers"].includes(normalizedText) &&
-        item.rect.top > labelRect.top - 10 &&
-        item.rect.top < labelRect.top + 40 &&
-        item.rect.left > labelRect.left + 100 &&
-        item.href &&
-        !item.href.includes("/editorial") &&
-        !item.href.includes("/account/") &&
-        !item.href.includes("/sneakers/")
+        looksLikeTrackingNumber(item.text) &&
+        item.rect.top > labelRect.top - 20 &&
+        item.rect.top < labelRect.top + 45 &&
+        item.rect.left > labelRect.left + 50
       );
     })
     .sort((a, b) => {
-      const da = Math.abs(a.rect.top - labelRect.top);
-      const db = Math.abs(b.rect.top - labelRect.top);
-      return da - db;
+      const topDiff = Math.abs(a.rect.top - labelRect.top) - Math.abs(b.rect.top - labelRect.top);
+      if (topDiff !== 0) return topDiff;
+      return a.rect.left - b.rect.left;
     });
 
   if (!candidates.length) {
     return { trackingNumber: "", trackingUrl: "" };
   }
 
+  const best = candidates[0];
+
+  let trackingUrl = best.href;
+
+  if (!isValidTrackingUrl(trackingUrl)) {
+    const matchingAnchor = getVisibleElements("a").find((a) => {
+      const text = String(a.innerText || "").trim().replace(/\s+/g, "");
+      return text === best.text && isValidTrackingUrl(a.href);
+    });
+
+    trackingUrl = matchingAnchor?.href || "";
+  }
+
   return {
-    trackingNumber: candidates[0].text.replace(/\s+/g, ""),
-    trackingUrl: candidates[0].href
+    trackingNumber: best.text,
+    trackingUrl
   };
 }
 
@@ -497,6 +505,23 @@ function looksLikeTrackingNumber(value) {
     /^\d{10,40}$/.test(text) ||
     /^1Z[A-Z0-9]{10,30}$/i.test(text)
   );
+}
+
+function isValidTrackingUrl(url) {
+  const value = String(url || "").trim();
+
+  if (!value.startsWith("http")) return false;
+
+  const lower = value.toLowerCase();
+
+  if (lower.includes("goat.com/editorial")) return false;
+  if (lower.includes("goat.com/account")) return false;
+  if (lower.includes("goat.com/sneakers")) return false;
+  if (lower.includes("goat.com/wants")) return false;
+  if (lower.includes("goat.com/offers")) return false;
+  if (lower === "https://www.goat.com/" || lower === "https://goat.com/") return false;
+
+  return true;
 }
 
 async function handleCheckoutPage() {
