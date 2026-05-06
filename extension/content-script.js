@@ -379,7 +379,6 @@ async function handleGoatSuccessPage() {
   await reportTaskResult("PURCHASED", {
     boughtSize,
     goatOrderNumber: orderNumber,
-    goatTrackingNumber: orderNumber,
     purchasedAt: new Date().toISOString(),
     errorMessage: ""
   });
