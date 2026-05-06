@@ -39,10 +39,21 @@ export async function submitTaskResult(recordId, payload) {
 
   const fields = {
     "GOAT LastAction": status,
-    "GOAT Final Price": moneyOrNull(payload.finalPrice),
-    "GOAT Bought Size": textOrEmpty(payload.boughtSize),
     "GOAT ErrorMessage": textOrEmpty(payload.errorMessage)
   };
+  
+  if (
+    status === STATUS.PURCHASED ||
+    status === STATUS.FAILED ||
+    status === STATUS.NO_VALID_PRICE ||
+    status === STATUS.SIZE_NOT_FOUND ||
+    status === STATUS.PRODUCT_NOT_FOUND ||
+    status === STATUS.ADDRESS_MISMATCH ||
+    status === STATUS.PAYMENT_MISMATCH
+  ) {
+    fields["GOAT Final Price"] = moneyOrNull(payload.finalPrice);
+    fields["GOAT Bought Size"] = textOrEmpty(payload.boughtSize);
+  }
 
   if (status === STATUS.PURCHASED) {
     fields["GOAT Purchased At"] = payload.purchasedAt || now;
