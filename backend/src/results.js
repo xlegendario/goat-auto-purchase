@@ -13,6 +13,9 @@ function textOrEmpty(value) {
 
 const ALLOWED_STATUSES = new Set([
   STATUS.PURCHASED,
+  STATUS.ORDER_SYNC,
+  STATUS.ORDER_NOT_READY,
+  STATUS.ORDER_SYNC_FAILED,
   STATUS.FAILED,
   STATUS.NO_VALID_PRICE,
   STATUS.SIZE_NOT_FOUND,
@@ -45,7 +48,22 @@ export async function submitTaskResult(recordId, payload) {
     fields["GOAT Purchased At"] = payload.purchasedAt || now;
   
     if (payload.goatOrderNumber) {
-      fields["GOAT Tracking Number"] = textOrEmpty(payload.goatOrderNumber);
+      fields["GOAT Order Number"] = textOrEmpty(payload.goatOrderNumber);
+    }
+  }
+
+  if (
+    status === STATUS.ORDER_SYNC ||
+    status === STATUS.ORDER_NOT_READY ||
+    status === STATUS.ORDER_SYNC_FAILED
+  ) {
+    fields["GOAT LastAction"] = STATUS.PURCHASED;
+    fields["LastGoatOrderSyncAt"] = now;
+  
+    if (status === STATUS.ORDER_SYNC) {
+      fields["GOAT Tracking Number"] = textOrEmpty(payload.goatTrackingNumber);
+      fields["GOAT Tracking URL"] = textOrEmpty(payload.goatTrackingUrl);
+      fields["GOAT ErrorMessage"] = "";
     }
   }
 
