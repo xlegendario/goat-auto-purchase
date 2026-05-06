@@ -61,6 +61,17 @@ export async function fetchGoatPurchaseCandidates() {
   return await fetchAllRecords(url);
 }
 
+export async function fetchGoatOrderSyncCandidates() {
+  const url = new URL(tableUrl(ORDERS_TABLE));
+
+  url.searchParams.set(
+    "filterByFormula",
+    "AND({GOAT Needs Order Sync}=1,{GOAT Order Number}!=\"\")"
+  );
+
+  return await fetchAllRecords(url);
+}
+
 export async function fetchSizeRow(brand, euSize) {
   const url = new URL(tableUrl(SIZE_TABLE));
 
