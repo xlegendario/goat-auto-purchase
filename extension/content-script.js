@@ -49,6 +49,11 @@ async function runGoatFlow() {
 
   console.log("Starting GOAT purchase flow:", currentTask);
 
+  if (currentTask.type === "GOAT_ORDER_SYNC") {
+    await handleGoatOrderSyncPage();
+    return;
+  }
+
   if (window.location.pathname.includes("/checkout/") && window.location.pathname.includes("/success")) {
     await handleGoatSuccessPage();
     return;
@@ -390,6 +395,122 @@ function extractGoatOrderNumber() {
   if (urlMatch?.[1]) return urlMatch[1];
 
   return null;
+}
+
+async function handleGoatOrderSyncPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("goat order sync")) return;
+
+  const orderNumber = String(currentTask.goatOrderNumber || "").trim();
+
+  if (!orderNumber) {
+    await reportTaskResult("ORDER_SYNC_FAILED", {
+      errorMessage: "Missing GOAT Order Number"
+    });
+    return;
+  }
+
+  const orderUrl = `https://www.goat.com/account/orders/${orderNumber}`;
+
+  if (!window.location.pathname.includes(`/account/orders/${orderNumber}`)) {
+    window.location.href = orderUrl;
+    return;
+  }
+
+  await sleep(1500);
+
+  const tracking = extractGoatTrackingFromOrderPage();
+
+  if (!tracking.trackingNumber) {
+    await reportTaskResult("ORDER_NOT_READY", {
+      errorMessage: `GOAT order ${orderNumber} has no tracking yet`
+    });
+    return;
+  }
+
+  await reportTaskResult("ORDER_SYNC", {
+    goatOrderNumber: orderNumber,
+    goatTrackingNumber: tracking.trackingNumber,
+    goatTrackingUrl: tracking.trackingUrl,
+    errorMessage: ""
+  });
+}
+
+function extractGoatTrackingFromOrderPage() {
+  const links = Array.from(document.querySelectorAll("a[href]"))
+    .filter(isVisible)
+    .map((a) => ({
+      text: String(a.innerText || "").trim(),
+      href: a.href
+    }));
+
+  const trackingLink = links.find((item) => {
+    if (!item.text) return false;
+
+    const text = normalizeText(item.text);
+    const href = normalizeText(item.href);
+
+    if (text.includes("currently unavailable")) return false;
+
+    return (
+      looksLikeTrackingNumber(item.text) ||
+      href.includes("tracking") ||
+      href.includes("track") ||
+      href.includes("ups") ||
+      href.includes("dhl") ||
+      href.includes("fedex") ||
+      href.includes("dpd") ||
+      href.includes("gls") ||
+      href.includes("postnl")
+    );
+  });
+
+  if (trackingLink) {
+    return {
+      trackingNumber: trackingLink.text,
+      trackingUrl: trackingLink.href
+    };
+  }
+
+  const lines = String(document.body.innerText || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const trackingIndex = lines.findIndex((line) => {
+    return normalizeText(line) === "tracking";
+  });
+
+  if (trackingIndex >= 0) {
+    const candidate = lines[trackingIndex + 1] || "";
+
+    if (
+      candidate &&
+      !normalizeText(candidate).includes("currently unavailable") &&
+      looksLikeTrackingNumber(candidate)
+    ) {
+      return {
+        trackingNumber: candidate,
+        trackingUrl: ""
+      };
+    }
+  }
+
+  return {
+    trackingNumber: "",
+    trackingUrl: ""
+  };
+}
+
+function looksLikeTrackingNumber(value) {
+  const text = String(value || "").trim();
+
+  return (
+    /^[A-Z0-9]{8,40}$/i.test(text) ||
+    /^\d{10,40}$/.test(text) ||
+    /^1Z[A-Z0-9]{10,30}$/i.test(text)
+  );
 }
 
 async function handleCheckoutPage() {
@@ -1012,6 +1133,7 @@ async function reportTaskResult(status, extra = {}) {
     errorMessage: extra.errorMessage || "",
     goatOrderNumber: extra.goatOrderNumber || "",
     goatTrackingNumber: extra.goatTrackingNumber || "",
+    goatTrackingUrl: extra.goatTrackingUrl || "",
     purchasedAt: extra.purchasedAt || ""
   };
 
