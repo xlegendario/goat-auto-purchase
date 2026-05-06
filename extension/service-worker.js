@@ -307,12 +307,12 @@ async function handleSingleTask() {
   });
 
   const startUrl = task.goatOrderUrl || task.goatUrl;
-  const tab = await openOrReuseRunnerTab(startUrl);
 
+  const tab = await openOrReuseRunnerTab(startUrl);
+  
   return {
     ok: true,
     task,
-    openedUrl: task.goatUrl,
     openedUrl: startUrl,
     tabId: tab.id
   };
