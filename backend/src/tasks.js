@@ -1,5 +1,6 @@
 import {
   fetchGoatPurchaseCandidates,
+  fetchGoatOrderSyncCandidates,
   fetchSizeRow,
   updateOrder
 } from "./airtable.js";
@@ -106,6 +107,10 @@ async function failRecord(recordId, status, errorMessage) {
   });
 }
 
+function getGoatOrderNumber(fields) {
+  return normalizeLookup(fields["GOAT Order Number"]);
+}
+
 export async function getNextTask({ runnerName, accountGroupKey }) {
   const normalizedRunnerName = normalizeKey(runnerName);
   const normalizedAccountGroupKey = normalizeKey(accountGroupKey);
@@ -114,6 +119,36 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
     throw new Error("runnerName is required");
   }
 
+  const orderSyncRecords = await fetchGoatOrderSyncCandidates();
+  
+  const eligibleOrderSync = sortOldestFirst(
+    orderSyncRecords.filter((record) => {
+      return recordMatchesRunner(
+        record.fields,
+        normalizedRunnerName,
+        normalizedAccountGroupKey
+      );
+    })
+  );
+  
+  if (eligibleOrderSync.length) {
+    const record = eligibleOrderSync[0];
+    const f = record.fields;
+    const goatOrderNumber = getGoatOrderNumber(f);
+  
+    return {
+      type: "GOAT_ORDER_SYNC",
+      recordId: record.id,
+      goatOrderNumber,
+      goatOrderUrl: `https://www.goat.com/account/orders/${goatOrderNumber}`,
+      runner: {
+        runnerName: normalizedRunnerName,
+        accountGroupKey: normalizedAccountGroupKey,
+        accountMode: getGoatAccountMode(f)
+      }
+    };
+  }
+  
   const records = await fetchGoatPurchaseCandidates();
 
   const eligible = sortOldestFirst(
