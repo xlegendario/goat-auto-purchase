@@ -420,13 +420,18 @@ async function handleGoatOrderSyncPage() {
   await sleep(2000);
 
   const tracking = extractGoatTrackingFromOrderPage();
+  const orderStatus = extractGoatOrderStatusFromOrderPage();
 
   console.log("GOAT tracking extracted:", tracking);
+  console.log("GOAT order status extracted:", orderStatus);
 
   if (!tracking.trackingNumber || !tracking.trackingUrl) {
     await reportTaskResult("ORDER_NOT_READY", {
-      errorMessage: `GOAT order ${orderNumber} has no tracking URL yet`
+      goatOrderNumber: orderNumber,
+      goatOrderStatus: orderStatus,
+      errorMessage: ""
     });
+
     return;
   }
 
@@ -434,6 +439,7 @@ async function handleGoatOrderSyncPage() {
     goatOrderNumber: orderNumber,
     goatTrackingNumber: tracking.trackingNumber,
     goatTrackingUrl: tracking.trackingUrl,
+    goatOrderStatus: orderStatus,
     errorMessage: ""
   });
 }
@@ -495,6 +501,21 @@ function extractGoatTrackingFromOrderPage() {
     trackingNumber: best.text,
     trackingUrl
   };
+}
+
+function extractGoatOrderStatusFromOrderPage() {
+  const lines = (document.body.innerText || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const statusIndex = lines.findIndex((line) => {
+    return normalizeText(line) === "status";
+  });
+
+  if (statusIndex === -1) return "";
+
+  return lines[statusIndex + 1] || "";
 }
 
 function looksLikeTrackingNumber(value) {
@@ -1145,7 +1166,8 @@ async function reportTaskResult(status, extra = {}) {
     goatOrderNumber: extra.goatOrderNumber || "",
     goatTrackingNumber: extra.goatTrackingNumber || "",
     goatTrackingUrl: extra.goatTrackingUrl || "",
-    purchasedAt: extra.purchasedAt || ""
+    purchasedAt: extra.purchasedAt || "",
+    goatOrderStatus: extra.goatOrderStatus || ""
   };
 
   console.log("Reporting GOAT task result:", payload);
