@@ -71,6 +71,10 @@ export async function submitTaskResult(recordId, payload) {
     fields["GOAT LastAction"] = STATUS.PURCHASED;
     fields["LastGoatOrderSyncAt"] = now;
   
+    if (payload.goatOrderStatus) {
+      fields["GOAT Order Status"] = textOrEmpty(payload.goatOrderStatus);
+    }
+  
     if (status === STATUS.ORDER_SYNC) {
       fields["GOAT Tracking Number"] = textOrEmpty(payload.goatTrackingNumber);
       fields["GOAT Tracking URL"] = textOrEmpty(payload.goatTrackingUrl);
