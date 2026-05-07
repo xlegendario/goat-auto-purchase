@@ -691,21 +691,34 @@ async function detectGoatSizeType() {
   console.log("Detecting GOAT size type...");
 
   const opened = await openSizePanel();
+
   if (!opened) {
     throw new Error("Could not open GOAT size panel");
   }
 
   const label = findSizePreferenceLabel();
+
   if (!label) {
     throw new Error("Could not find GOAT size preference label");
   }
 
-  const text = normalizeText(label.innerText);
+  const fullText = normalizeText(label.innerText || label.textContent);
 
-  if (text.includes("women")) return "US Women's Size";
-  if (text.includes("youth")) return "US Youth Size";
-  if (text.includes("infant")) return "US Infant Size";
-  if (text.includes("men")) return "US Men's Size";
+  // GOAT can show:
+  // "US Men's Size 9 / US Women's Size 10.5"
+  // "US Men's Size 9 / EU Size 42"
+  // Always use the primary value before "/"
+  const primaryText = fullText.split("/")[0].trim();
+
+  console.log("Detected GOAT size label:", {
+    fullText,
+    primaryText
+  });
+
+  if (primaryText.includes("women")) return "US Women's Size";
+  if (primaryText.includes("youth")) return "US Youth Size";
+  if (primaryText.includes("infant")) return "US Infant Size";
+  if (primaryText.includes("men")) return "US Men's Size";
 
   throw new Error(`Could not detect GOAT size type from label: ${label.innerText}`);
 }
