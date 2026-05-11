@@ -127,24 +127,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     submitTaskResult(message.payload)
       .then(async (result) => {
         await clearCurrentTaskState();
-
+  
+        await loadState();
+  
         if (isRunnerEnabled) {
           await scheduleNextRun(3000);
           setTimeout(() => runLoop().catch(console.error), 3000);
+        } else {
+          console.warn("TASK_COMPLETED submitted, but runnerEnabled is false after loadState");
         }
-
+  
         sendResponse({ ok: true, result });
       })
       .catch(async (err) => {
+        console.error("TASK_COMPLETED failed:", err);
+  
         await clearCurrentTaskState();
-
+  
+        await loadState();
+  
         if (isRunnerEnabled) {
           await scheduleNextRun(ERROR_RETRY_DELAY_MS);
         }
-
+  
         sendResponse({ ok: false, error: err.message });
       });
-
+  
     return true;
   }
 });
