@@ -360,12 +360,32 @@ function sizeTypeToCategory(sizeType) {
   return null;
 }
 
+async function waitForGoatSuccessOrderNumber() {
+  for (let i = 0; i < 20; i++) {
+    const orderNumber = extractGoatOrderNumberFromSuccessPage();
+
+    if (orderNumber) {
+      return orderNumber;
+    }
+
+    await sleep(500);
+  }
+
+  return "";
+}
+
 function extractGoatOrderNumberFromSuccessPage() {
-  const urlMatch = window.location.pathname.match(/\/checkout\/(\d+)\/success/);
-  if (urlMatch?.[1]) return urlMatch[1];
+  const pathMatch = window.location.pathname.match(/\/checkout\/(\d+)\/success/i);
+  if (pathMatch?.[1]) return pathMatch[1];
+
+  const queryOrderNumber = new URLSearchParams(window.location.search).get("orderNumber");
+  if (queryOrderNumber) return queryOrderNumber;
+
+  const referrerMatch = String(document.referrer || "").match(/[?&]orderNumber=(\d+)/i);
+  if (referrerMatch?.[1]) return referrerMatch[1];
 
   const text = document.body.innerText || "";
-  const textMatch = text.match(/Order\s*#?\s*(\d+)/i);
+  const textMatch = text.match(/Order\s*#\s*(\d{6,})/i);
   if (textMatch?.[1]) return textMatch[1];
 
   return "";
@@ -380,9 +400,15 @@ async function handleGoatSuccessPage() {
   const boughtSize = pending?.boughtSize || "";
   const finalPrice = Number(storedPrice.goatCheckoutFinalPrice);
 
-  const orderNumber = extractGoatOrderNumberFromSuccessPage();
+  const orderNumber = await waitForGoatSuccessOrderNumber();
 
   if (!orderNumber) {
+    console.warn("GOAT success page reached but order number not found", {
+      url: window.location.href,
+      referrer: document.referrer,
+      bodyText: String(document.body.innerText || "").slice(0, 500)
+    });
+  
     await reportTaskResult("PURCHASED", {
       finalPrice,
       boughtSize,
