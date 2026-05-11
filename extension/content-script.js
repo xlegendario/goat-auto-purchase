@@ -1277,9 +1277,11 @@ async function reportTaskResult(status, extra = {}) {
     payload
   });
   
+  if (!result?.ok) {
+    console.error("TASK_COMPLETED failed:", result);
+  }
+  
   await chrome.storage.local.remove([
-    "currentTask",
-    "currentTaskStartedAt",
     "goatPendingCheckout",
     "goatCheckoutFinalPrice",
     "goatSuccessContext"
