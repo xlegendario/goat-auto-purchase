@@ -364,7 +364,10 @@ async function handleGoatSuccessPage() {
   await waitForPageReady();
 
   const pending = await getPendingCheckout();
+  const storedPrice = await chrome.storage.local.get(["goatCheckoutFinalPrice"]);
+  
   const boughtSize = pending?.boughtSize || "";
+  const finalPrice = Number(storedPrice.goatCheckoutFinalPrice);
 
   const orderNumber = extractGoatOrderNumber();
 
@@ -377,6 +380,7 @@ async function handleGoatSuccessPage() {
   }
 
   await reportTaskResult("PURCHASED", {
+    finalPrice,
     boughtSize,
     goatOrderNumber: orderNumber,
     purchasedAt: new Date().toISOString(),
@@ -639,6 +643,10 @@ async function handleCheckoutPage() {
 
     return;
   }
+
+  await chrome.storage.local.set({
+    goatCheckoutFinalPrice: finalPrice
+  });
 
   clickElement(placeOrderButton);
 
