@@ -373,7 +373,9 @@ async function handleGoatSuccessPage() {
 
   if (!orderNumber) {
     await reportTaskResult("PURCHASED", {
+      finalPrice,
       boughtSize,
+      purchasedAt: new Date().toISOString(),
       errorMessage: "Purchase success page reached, but GOAT order number not found"
     });
     return;
