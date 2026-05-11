@@ -8,8 +8,30 @@ window.addEventListener("load", async () => {
   currentTask = stored.currentTask || null;
 
   if (!currentTask) {
-    console.log("No GOAT currentTask found");
-    return;
+    const data = await chrome.storage.local.get([
+      "goatSuccessContext",
+      "goatPendingCheckout"
+    ]);
+  
+    const recovery = data.goatSuccessContext || data.goatPendingCheckout;
+  
+    if (
+      window.location.pathname.includes("/checkout/") &&
+      window.location.pathname.includes("/success") &&
+      recovery?.recordId
+    ) {
+      currentTask = {
+        recordId: recovery.recordId,
+        sku: recovery.sku || "",
+        maxBuyingPrice: recovery.maxBuyingPrice || "",
+        dryRun: recovery.dryRun === true
+      };
+  
+      console.log("Recovered GOAT currentTask on success page:", currentTask);
+    } else {
+      console.log("No GOAT currentTask found");
+      return;
+    }
   }
 
   if (flowStarted) return;
@@ -394,12 +416,18 @@ function extractGoatOrderNumberFromSuccessPage() {
 async function handleGoatSuccessPage() {
   await waitForPageReady();
 
-  const pending = await getPendingCheckout();
-  const storedPrice = await chrome.storage.local.get(["goatCheckoutFinalPrice"]);
+  const successData = await chrome.storage.local.get([
+    "goatSuccessContext",
+    "goatCheckoutFinalPrice"
+  ]);
   
-  const boughtSize = pending?.boughtSize || "";
-  const finalPrice = Number(storedPrice.goatCheckoutFinalPrice);
-
+  const successContext = successData.goatSuccessContext || {};
+  
+  const boughtSize = successContext.boughtSize || "";
+  const finalPrice = Number(
+    successContext.finalPrice || successData.goatCheckoutFinalPrice || 0
+  );
+  
   const orderNumber = await waitForGoatSuccessOrderNumber();
 
   if (!orderNumber) {
@@ -684,9 +712,17 @@ async function handleCheckoutPage() {
   }
 
   await chrome.storage.local.set({
-    goatCheckoutFinalPrice: finalPrice
+    goatCheckoutFinalPrice: finalPrice,
+    goatSuccessContext: {
+      recordId: currentTask.recordId,
+      sku: currentTask.sku,
+      boughtSize,
+      finalPrice,
+      maxBuyingPrice: currentTask.maxBuyingPrice,
+      dryRun: currentTask.dryRun === true
+    }
   });
-
+  
   clickElement(placeOrderButton);
 
   await sleep(4000);
@@ -1245,7 +1281,8 @@ async function reportTaskResult(status, extra = {}) {
     "currentTask",
     "currentTaskStartedAt",
     "goatPendingCheckout",
-    "goatCheckoutFinalPrice"
+    "goatCheckoutFinalPrice",
+    "goatSuccessContext"
   ]);
   
   return result;
