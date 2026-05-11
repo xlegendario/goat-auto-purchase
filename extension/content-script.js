@@ -360,6 +360,17 @@ function sizeTypeToCategory(sizeType) {
   return null;
 }
 
+function extractGoatOrderNumberFromSuccessPage() {
+  const urlMatch = window.location.pathname.match(/\/checkout\/(\d+)\/success/);
+  if (urlMatch?.[1]) return urlMatch[1];
+
+  const text = document.body.innerText || "";
+  const textMatch = text.match(/Order\s*#?\s*(\d+)/i);
+  if (textMatch?.[1]) return textMatch[1];
+
+  return "";
+}
+
 async function handleGoatSuccessPage() {
   await waitForPageReady();
 
@@ -369,7 +380,7 @@ async function handleGoatSuccessPage() {
   const boughtSize = pending?.boughtSize || "";
   const finalPrice = Number(storedPrice.goatCheckoutFinalPrice);
 
-  const orderNumber = extractGoatOrderNumber();
+  const orderNumber = extractGoatOrderNumberFromSuccessPage();
 
   if (!orderNumber) {
     await reportTaskResult("PURCHASED", {
@@ -1182,10 +1193,14 @@ function clickElementAtCenter(el) {
 async function reportTaskResult(status, extra = {}) {
   const payload = {
     recordId: currentTask.recordId,
+
     status,
-    finalPrice: extra.finalPrice ?? null,
-    boughtSize: extra.boughtSize ?? "",
+
+    finalPrice: extra.finalPrice || null,
+    boughtSize: extra.boughtSize || "",
+
     errorMessage: extra.errorMessage || "",
+
     goatOrderNumber: extra.goatOrderNumber || "",
     goatTrackingNumber: extra.goatTrackingNumber || "",
     goatTrackingUrl: extra.goatTrackingUrl || "",
@@ -1195,10 +1210,19 @@ async function reportTaskResult(status, extra = {}) {
 
   console.log("Reporting GOAT task result:", payload);
 
-  await chrome.runtime.sendMessage({
+  const result = await chrome.runtime.sendMessage({
     type: "TASK_COMPLETED",
     payload
   });
+  
+  await chrome.storage.local.remove([
+    "currentTask",
+    "currentTaskStartedAt",
+    "goatPendingCheckout",
+    "goatCheckoutFinalPrice"
+  ]);
+  
+  return result;
 }
 
 function normalizeText(value) {
