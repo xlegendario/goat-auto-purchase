@@ -57,6 +57,7 @@ export async function submitTaskResult(recordId, payload) {
 
   if (status === STATUS.PURCHASED) {
     fields["GOAT Purchased At"] = payload.purchasedAt || now;
+    fields["Fulfillment Status"] = { name: "GOAT Processing" };
   
     if (payload.goatOrderNumber) {
       fields["GOAT Order Number"] = textOrEmpty(payload.goatOrderNumber);
