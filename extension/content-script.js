@@ -787,11 +787,9 @@ async function detectGoatSizeType() {
 
   const fullText = normalizeText(label.innerText || label.textContent);
 
-  // GOAT can show:
-  // "US Men's Size 9 / US Women's Size 10.5"
-  // "US Men's Size 9 / EU Size 42"
-  // Always use the primary value before "/"
-  const primaryText = fullText.split("/")[0].trim();
+  const primaryText = fullText.includes("/")
+    ? fullText.split("/")[0].trim()
+    : fullText;
 
   console.log("Detected GOAT size label:", {
     fullText,
@@ -868,36 +866,41 @@ function isVisible(el) {
 }
 
 function findSizePreferenceLabel() {
-  const wanted = [
-    "us women's size",
-    "us womens size",
-    "us men's size",
-    "us mens size",
-    "us youth size",
-    "us infant size"
-  ];
+  const matches = getVisibleElements("button, div, span")
+    .map((el) => {
+      const text = normalizeText(el.innerText || el.textContent);
+      const rect = el.getBoundingClientRect();
 
-  const matches = getVisibleElements("button, div, span").filter((el) => {
-    const text = normalizeText(el.innerText);
-    const rect = el.getBoundingClientRect();
+      return {
+        el,
+        text,
+        area: rect.width * rect.height
+      };
+    })
+    .filter((item) => {
+      return (
+        (
+          item.text.includes("us men's size") ||
+          item.text.includes("us mens size") ||
+          item.text.includes("us men's sizes") ||
+          item.text.includes("us mens sizes") ||
+          item.text.includes("us women's size") ||
+          item.text.includes("us womens size") ||
+          item.text.includes("us women's sizes") ||
+          item.text.includes("us womens sizes") ||
+          item.text.includes("us youth size") ||
+          item.text.includes("us youth sizes") ||
+          item.text.includes("us infant size") ||
+          item.text.includes("us infant sizes")
+        ) &&
+        item.area < 30000
+      );
+    })
+    .sort((a, b) => a.area - b.area);
 
-    return (
-      wanted.some((phrase) => text.includes(phrase)) &&
-      rect.top > window.innerHeight * 0.35 &&
-      rect.top < window.innerHeight * 0.8 &&
-      rect.width > 40 &&
-      rect.width < 400 &&
-      rect.height > 10 &&
-      rect.height < 80
-    );
-  });
+  console.log("GOAT size preference label candidates:", matches.map((m) => m.text));
 
-  return matches.sort((a, b) => {
-    const ar = a.getBoundingClientRect();
-    const br = b.getBoundingClientRect();
-
-    return (ar.width * ar.height) - (br.width * br.height);
-  })[0] || null;
+  return matches[0]?.el || null;
 }
 
 async function openSizePanel() {
