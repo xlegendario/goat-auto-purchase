@@ -617,6 +617,17 @@ function isValidTrackingUrl(url) {
   return true;
 }
 
+function detectGoatPaymentFailurePopup() {
+  const text = normalizeText(document.body.innerText || "");
+
+  return (
+    text.includes("insufficient funds") ||
+    text.includes("payment could not be processed") ||
+    text.includes("there was a problem processing your payment") ||
+    text.includes("please try again")
+  );
+}
+
 async function handleCheckoutPage() {
   await waitForPageReady();
 
@@ -738,34 +749,28 @@ async function handleCheckoutPage() {
   
   clickElement(placeOrderButton);
   
-  await sleep(7000);
+  for (let i = 0; i < 20; i++) {
+    await sleep(1000);
   
-  if (!window.location.pathname.includes("/success")) {
-    const pageText = normalizeText(document.body.innerText || "");
-  
-    if (
-      pageText.includes("insufficient") ||
-      pageText.includes("insufficient funds") ||
-      pageText.includes("unable to process") ||
-      pageText.includes("payment") ||
-      pageText.includes("declined")
-    ) {
+    if (detectGoatPaymentFailurePopup()) {
       await reportTaskResult("PAYMENT_MISMATCH", {
         finalPrice,
         boughtSize,
-        errorMessage: "GOAT payment failed after Securely Place Order, possible insufficient funds"
+        errorMessage: "GOAT payment failed: insufficient funds / payment could not be processed"
       });
       return;
     }
   
-    await reportTaskResult("PURCHASE_FAILED", {
-      finalPrice,
-      boughtSize,
-      errorMessage: "Clicked Securely Place Order but did not reach GOAT success page"
-    });
-    return;
+    if (window.location.pathname.includes("/success")) {
+      return;
+    }
   }
   
+  await reportTaskResult("PURCHASE_FAILED", {
+    finalPrice,
+    boughtSize,
+    errorMessage: "Clicked Securely Place Order but did not reach GOAT success page"
+  });
   return;
 }
 
