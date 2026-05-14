@@ -433,15 +433,16 @@ async function handleGoatSuccessPage() {
   if (!orderNumber) {
     console.warn("GOAT success page reached but order number not found", {
       url: window.location.href,
+      pathname: window.location.pathname,
+      search: window.location.search,
       referrer: document.referrer,
       bodyText: String(document.body.innerText || "").slice(0, 500)
     });
   
-    await reportTaskResult("PURCHASED", {
+    await reportTaskResult("PURCHASE_FAILED", {
       finalPrice,
       boughtSize,
-      purchasedAt: new Date().toISOString(),
-      errorMessage: "Purchase success page reached, but GOAT order number not found"
+      errorMessage: "GOAT success page reached, but GOAT order number not found"
     });
     return;
   }
