@@ -1125,14 +1125,11 @@ function selectAndVerifyPayment(method, last4) {
   const normalizedMethod = normalizeText(method);
   const normalizedLast4 = normalizeText(last4);
 
-  if (normalizedMethod.includes("paypal")) {
-    const paypal = findElementByText("paypal");
-
-    if (!paypal) return false;
-
-    clickElement(paypal);
-    return true;
-  }
+  console.log("Selecting GOAT payment:", {
+    method,
+    last4,
+    normalizedLast4
+  });
 
   if (
     normalizedMethod.includes("creditcard") ||
@@ -1141,14 +1138,16 @@ function selectAndVerifyPayment(method, last4) {
   ) {
     if (!normalizedLast4) return false;
 
-    const card = getVisibleElements("button, div").find((el) => {
+    const cardCandidates = getVisibleElements("button, div, span").filter((el) => {
       const text = normalizeText(el.innerText);
       return text.includes(normalizedLast4);
     });
 
-    if (!card) return false;
+    console.log("GOAT card candidates:", cardCandidates.map((el) => el.innerText));
 
-    clickElement(card);
+    if (!cardCandidates.length) return false;
+
+    clickElement(cardCandidates[0]);
     return true;
   }
 
