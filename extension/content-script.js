@@ -723,15 +723,49 @@ async function handleCheckoutPage() {
     }
   });
   
-  clickElement(placeOrderButton);
-
-  await sleep(4000);
-
-  await reportTaskResult("PURCHASED", {
-    finalPrice,
-    boughtSize,
-    errorMessage: ""
+  await chrome.storage.local.set({
+    goatCheckoutFinalPrice: finalPrice,
+    goatSuccessContext: {
+      recordId: currentTask.recordId,
+      sku: currentTask.sku,
+      boughtSize,
+      finalPrice,
+      maxBuyingPrice: currentTask.maxBuyingPrice,
+      dryRun: currentTask.dryRun === true
+    }
   });
+  
+  clickElement(placeOrderButton);
+  
+  await sleep(7000);
+  
+  if (!window.location.pathname.includes("/success")) {
+    const pageText = normalizeText(document.body.innerText || "");
+  
+    if (
+      pageText.includes("insufficient") ||
+      pageText.includes("insufficient funds") ||
+      pageText.includes("unable to process") ||
+      pageText.includes("payment") ||
+      pageText.includes("declined")
+    ) {
+      await reportTaskResult("PAYMENT_MISMATCH", {
+        finalPrice,
+        boughtSize,
+        errorMessage: "GOAT payment failed after Securely Place Order, possible insufficient funds"
+      });
+      return;
+    }
+  
+    await reportTaskResult("PURCHASE_FAILED", {
+      finalPrice,
+      boughtSize,
+      errorMessage: "Clicked Securely Place Order but did not reach GOAT success page"
+    });
+    return;
+  }
+  
+  return;
 }
 
 async function getPendingCheckout() {
