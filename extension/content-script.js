@@ -681,6 +681,8 @@ async function handleCheckoutPage() {
     return;
   }
 
+  await waitAfterPaymentClick(currentTask.merchant?.creditcardLast4);
+
   const finalPrice = extractCheckoutTotal();
 
   if (!Number.isFinite(finalPrice)) {
@@ -1204,12 +1206,29 @@ function parseMoney(raw) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+async function waitAfterPaymentClick(last4) {
+  console.log("Waiting after selecting GOAT payment:", last4);
+  await sleep(2500);
+}
+
 function findButtonByText(targetText) {
   const target = normalizeText(targetText);
 
-  return getVisibleElements("button, [role='button'], div").find((el) => {
-    return normalizeText(el.innerText) === target;
-  }) || null;
+  return getVisibleElements("button, [role='button'], div")
+    .filter((el) => {
+      const text = normalizeText(el.innerText);
+      const disabled =
+        el.disabled === true ||
+        el.getAttribute("aria-disabled") === "true" ||
+        el.getAttribute("disabled") !== null;
+
+      return text === target && !disabled;
+    })
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.width * ar.height - br.width * br.height;
+    })[0] || null;
 }
 
 function findElementByText(targetText) {
