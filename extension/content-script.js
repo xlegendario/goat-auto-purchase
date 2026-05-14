@@ -1147,7 +1147,21 @@ function selectAndVerifyPayment(method, last4) {
 
     if (!cardCandidates.length) return false;
 
-    clickElement(cardCandidates[0]);
+    const bestCard = cardCandidates
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        return {
+          el,
+          text: normalizeText(el.innerText),
+          area: rect.width * rect.height
+        };
+      })
+      .filter((item) => item.text.includes(normalizedLast4))
+      .sort((a, b) => a.area - b.area)[0]?.el;
+    
+    if (!bestCard) return false;
+    
+    clickElementAtCenter(bestCard);
     return true;
   }
 
