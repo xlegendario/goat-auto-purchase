@@ -183,11 +183,22 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
 
   let resolved;
 
+  let resolved;
+  let useGoatSearchFallback = false;
+  
   try {
     resolved = await resolveGoatUrlBySku(sku);
   } catch (err) {
-    await failRecord(record.id, STATUS.PRODUCT_NOT_FOUND, err.message);
-    return null;
+    console.warn("Retailed GOAT lookup failed, using GOAT search fallback:", err.message);
+  
+    resolved = {
+      goatUrl: "https://www.goat.com",
+      slug: null,
+      matchedSku: null,
+      raw: null
+    };
+  
+    useGoatSearchFallback = true;
   }
 
   const sizeRow = await fetchSizeRow(brand, euSize);
@@ -219,6 +230,7 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
     maxBuyingPrice,
 
     goatUrl: resolved.goatUrl,
+    useGoatSearchFallback,
 
     sizeMap,
 
