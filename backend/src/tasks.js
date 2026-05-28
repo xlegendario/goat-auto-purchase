@@ -101,7 +101,6 @@ function sortOldestFirst(records) {
 
 async function failRecord(recordId, status, errorMessage) {
   await updateOrder(recordId, {
-    "GOAT Purchase Status": status,
     "GOAT LastAction": status,
     "GOAT ErrorMessage": errorMessage || status
   });
