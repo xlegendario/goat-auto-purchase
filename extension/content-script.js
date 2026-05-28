@@ -92,10 +92,123 @@ async function runGoatFlow() {
   }
 
   if (!window.location.pathname.includes("/sneakers/")) {
+    if (currentTask.useGoatSearchFallback) {
+      await searchGoatProductBySku(currentTask.sku);
+      return;
+    }
+  
     window.location.href = currentTask.goatUrl;
     return;
   }
 
+  await handleProductPage();
+}
+
+async function searchGoatProductBySku(sku) {
+  const searchText = String(sku || "").trim();
+
+  if (!searchText) {
+    throw new Error("Missing SKU for GOAT search fallback");
+  }
+
+  const searchButton = getVisibleElements("button, div, span, a")
+    .find((el) => normalizeText(el.innerText || el.textContent) === "search");
+
+  if (!searchButton) {
+    throw new Error("GOAT search button not found");
+  }
+
+  clickElement(searchButton);
+  await sleep(800);
+
+  const searchInput =
+    Array.from(document.querySelectorAll("input")).find((input) => {
+      const rect = input.getBoundingClientRect();
+      return rect.width > 150 && rect.height > 20;
+    });
+
+  if (!searchInput) {
+    throw new Error("GOAT search input not found");
+  }
+
+  searchInput.focus();
+
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value"
+  ).set;
+
+  setter.call(searchInput, searchText);
+
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+  searchInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+  await sleep(1800);
+
+  const resultCandidates = getVisibleElements("img")
+    .map((img) => {
+      const rect = img.getBoundingClientRect();
+      const parent = img.closest("a, button, div");
+
+      return {
+        el: parent || img,
+        img,
+        text: normalizeText((parent || img).innerText || ""),
+        area: rect.width * rect.height,
+        top: rect.top,
+        rect
+      };
+    })
+    .filter((item) => {
+      return (
+        item.top > 80 &&
+        item.area > 300 &&
+        item.area < 50000
+      );
+    })
+    .sort((a, b) => a.top - b.top);
+
+  if (!resultCandidates.length) {
+    throw new Error(`GOAT search result image not found for SKU ${searchText}`);
+  }
+
+  const result = resultCandidates[0];
+  const imgRect = result.img.getBoundingClientRect();
+
+  console.log("Clicking GOAT search result image:", {
+    sku: searchText,
+    text: result.text,
+    rect: {
+      left: imgRect.left,
+      top: imgRect.top,
+      width: imgRect.width,
+      height: imgRect.height
+    }
+  });
+
+  clickAtPoint(
+    imgRect.left + imgRect.width / 2,
+    imgRect.top + imgRect.height / 2
+  );
+
+  await sleep(4000);
+
+  if (!window.location.pathname.includes("/sneakers/")) {
+    throw new Error(`Clicked GOAT result image but product page did not open for SKU ${searchText}`);
+  }
+
+  currentTask.goatUrl = window.location.href;
+  currentTask.useGoatSearchFallback = false;
+
+  await chrome.storage.local.set({
+    currentTask
+  });
+
+  console.log("GOAT search fallback landed on product page, continuing flow:", {
+    goatUrl: currentTask.goatUrl
+  });
+
+  await waitForPageReady();
   await handleProductPage();
 }
 
