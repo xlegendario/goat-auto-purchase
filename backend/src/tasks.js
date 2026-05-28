@@ -181,8 +181,6 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
   }
 
   let resolved;
-
-  let resolved;
   let useGoatSearchFallback = false;
   
   try {
