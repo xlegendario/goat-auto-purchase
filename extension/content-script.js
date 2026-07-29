@@ -277,7 +277,7 @@ async function handleProductPage() {
     return;
   }
 
-  await sleep(1500);
+  await sleep(500);
 
   const bestPrice = findBestPriceOption();
 
@@ -1048,7 +1048,7 @@ function findSizePreferenceLabel() {
           item.text.includes("us infant size") ||
           item.text.includes("us infant sizes")
         ) &&
-        item.area < 30000
+        item.area < 50000
       );
     })
     .sort((a, b) => a.area - b.area);
@@ -1059,38 +1059,117 @@ function findSizePreferenceLabel() {
 }
 
 async function openSizePanel() {
-  const yPoints = [
-    window.innerHeight - 110,
-    window.innerHeight - 90,
-    window.innerHeight - 75,
-    window.innerHeight - 60
+  console.log("Opening GOAT size panel...", {
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight
+  });
+
+  window.scrollTo({
+    top: document.documentElement.scrollHeight,
+    behavior: "instant"
+  });
+
+  await sleep(500);
+
+  // This purchase flow navigates product -> preferences -> product.
+  // Store the successful hover point in chrome.storage so it survives navigation.
+  const stored = await chrome.storage.local.get("goatWorkingHoverPoint");
+  const cachedPoint = stored.goatWorkingHoverPoint || null;
+
+  if (cachedPoint?.xRatio && cachedPoint?.bottomOffset) {
+    const x = window.innerWidth * cachedPoint.xRatio;
+    const y = window.innerHeight - cachedPoint.bottomOffset;
+
+    console.log("Trying cached GOAT hover point:", {
+      x,
+      y,
+      ...cachedPoint
+    });
+
+    moveMouseAt(x, y);
+    await sleep(250);
+
+    if (findSizePreferenceLabel()) {
+      console.log("Cached GOAT hover point worked immediately");
+      return true;
+    }
+
+    console.log("Cached GOAT hover point failed; clearing it");
+    await chrome.storage.local.remove("goatWorkingHoverPoint");
+  }
+
+  const priorityPoints = [
+    { xRatio: 0.50, bottomOffset: 100 },
+    { xRatio: 0.60, bottomOffset: 100 },
+    { xRatio: 0.70, bottomOffset: 100 },
+    { xRatio: 0.50, bottomOffset: 120 },
+    { xRatio: 0.60, bottomOffset: 120 },
+    { xRatio: 0.70, bottomOffset: 120 },
+    { xRatio: 0.50, bottomOffset: 80 },
+    { xRatio: 0.60, bottomOffset: 80 },
+    { xRatio: 0.70, bottomOffset: 80 }
   ];
 
-  const xPoints = [
-    window.innerWidth * 0.35,
-    window.innerWidth * 0.45,
-    window.innerWidth * 0.55,
-    window.innerWidth * 0.65
-  ];
+  for (const point of priorityPoints) {
+    const x = window.innerWidth * point.xRatio;
+    const y = window.innerHeight - point.bottomOffset;
 
-  for (let attempt = 0; attempt < 20; attempt++) {
-    for (const y of yPoints) {
-      for (const x of xPoints) {
-        console.log("Trying GOAT hover point:", { x, y });
+    console.log("Trying GOAT priority hover point:", { x, y, ...point });
+
+    moveMouseAt(x, y);
+    await sleep(180);
+
+    if (findSizePreferenceLabel()) {
+      await chrome.storage.local.set({
+        goatWorkingHoverPoint: point
+      });
+
+      console.log("GOAT size panel opened at priority point:", point);
+      return true;
+    }
+  }
+
+  const fallbackXRatios = [0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85];
+  const fallbackBottomOffsets = [60, 80, 100, 120, 140, 160, 180];
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(`GOAT fallback hover attempt ${attempt}/3`);
+
+    for (const bottomOffset of fallbackBottomOffsets) {
+      const y = window.innerHeight - bottomOffset;
+
+      for (const xRatio of fallbackXRatios) {
+        const x = window.innerWidth * xRatio;
 
         moveMouseAt(x, y);
-        await sleep(250);
+        await sleep(180);
 
-        if (getSizeSliderBounds()) {
-          console.log("GOAT size panel opened");
+        if (findSizePreferenceLabel()) {
+          const workingPoint = { xRatio, bottomOffset };
+
+          await chrome.storage.local.set({
+            goatWorkingHoverPoint: workingPoint
+          });
+
+          console.log("GOAT size panel opened during fallback:", {
+            attempt,
+            ...workingPoint
+          });
+
           return true;
         }
       }
     }
 
-    await sleep(500);
+    window.scrollBy({
+      top: attempt % 2 === 0 ? -150 : 150,
+      behavior: "instant"
+    });
+
+    await sleep(400);
   }
 
+  console.error("GOAT size panel did not open");
   return false;
 }
 
