@@ -143,73 +143,81 @@ async function searchGoatProductBySku(sku) {
   searchInput.dispatchEvent(new Event("input", { bubbles: true }));
   searchInput.dispatchEvent(new Event("change", { bubbles: true }));
 
-  await sleep(1800);
+  await sleep(2000);
 
-  const resultCandidates = getVisibleElements("img")
-    .map((img) => {
-      const rect = img.getBoundingClientRect();
-      const parent = img.closest("a, button, div");
+  const productLinks = Array.from(
+    document.querySelectorAll('a[href*="/sneakers/"]')
+  )
+    .filter(isVisible)
+    .map((a) => {
+      const rect = a.getBoundingClientRect();
+      const img = a.querySelector("img");
 
       return {
-        el: parent || img,
-        img,
-        text: normalizeText((parent || img).innerText || ""),
-        area: rect.width * rect.height,
-        top: rect.top,
-        rect
+        el: a,
+        href: a.href,
+        text: normalizeText(a.innerText || a.textContent),
+        rect,
+        hasImage: !!img
       };
     })
     .filter((item) => {
       return (
-        item.top > 80 &&
-        item.area > 300 &&
-        item.area < 50000
+        item.hasImage &&
+        item.rect.top > 70 &&
+        item.rect.left < window.innerWidth * 0.35 &&
+        item.rect.width > 20 &&
+        item.rect.height > 20
       );
     })
-    .sort((a, b) => a.top - b.top);
+    .sort((a, b) => {
+      if (a.rect.top !== b.rect.top) {
+        return a.rect.top - b.rect.top;
+      }
 
-  if (!resultCandidates.length) {
-    throw new Error(`GOAT search result image not found for SKU ${searchText}`);
+      return a.rect.left - b.rect.left;
+    });
+
+  console.log("GOAT search product link candidates:", productLinks.map((item) => ({
+    href: item.href,
+    text: item.text,
+    rect: {
+      left: item.rect.left,
+      top: item.rect.top,
+      width: item.rect.width,
+      height: item.rect.height
+    }
+  })));
+
+  if (!productLinks.length) {
+    throw new Error(
+      `GOAT search fallback: no sneaker product link found for SKU ${searchText}`
+    );
   }
 
-  const result = resultCandidates[0];
-  const imgRect = result.img.getBoundingClientRect();
+  const productLink = productLinks[0];
+  const targetUrl = productLink.href;
 
-  console.log("Clicking GOAT search result image:", {
+  if (!targetUrl || !targetUrl.includes("/sneakers/")) {
+    throw new Error(
+      `GOAT search fallback found invalid product URL for SKU ${searchText}: ${targetUrl}`
+    );
+  }
+
+  console.log("Opening GOAT search result link:", {
     sku: searchText,
-    text: result.text,
-    rect: {
-      left: imgRect.left,
-      top: imgRect.top,
-      width: imgRect.width,
-      height: imgRect.height
-    }
+    href: targetUrl,
+    text: productLink.text
   });
 
-  clickAtPoint(
-    imgRect.left + imgRect.width / 2,
-    imgRect.top + imgRect.height / 2
-  );
-
-  await sleep(4000);
-
-  if (!window.location.pathname.includes("/sneakers/")) {
-    throw new Error(`Clicked GOAT result image but product page did not open for SKU ${searchText}`);
-  }
-
-  currentTask.goatUrl = window.location.href;
+  currentTask.goatUrl = targetUrl;
   currentTask.useGoatSearchFallback = false;
 
   await chrome.storage.local.set({
     currentTask
   });
 
-  console.log("GOAT search fallback landed on product page, continuing flow:", {
-    goatUrl: currentTask.goatUrl
-  });
-
-  await waitForPageReady();
-  await handleProductPage();
+  window.location.href = targetUrl;
 }
 
 async function handleProductPage() {
