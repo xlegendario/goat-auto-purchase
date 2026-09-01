@@ -1,3 +1,109 @@
+console.log("GOAT Auto Purchase content script loaded");
+
+let currentTask = null;
+let flowStarted = false;
+
+window.addEventListener("load", async () => {
+  const stored = await chrome.storage.local.get("currentTask");
+  currentTask = stored.currentTask || null;
+
+  if (!currentTask) {
+    const data = await chrome.storage.local.get([
+      "goatSuccessContext",
+      "goatPendingCheckout"
+    ]);
+  
+    const recovery = data.goatSuccessContext || data.goatPendingCheckout;
+  
+    if (
+      window.location.pathname.includes("/checkout/") &&
+      window.location.pathname.includes("/success") &&
+      recovery?.recordId
+    ) {
+      currentTask = {
+        recordId: recovery.recordId,
+        sku: recovery.sku || "",
+        maxBuyingPrice: recovery.maxBuyingPrice || "",
+        dryRun: recovery.dryRun === true
+      };
+  
+      console.log("Recovered GOAT currentTask on success page:", currentTask);
+    } else {
+      console.log("No GOAT currentTask found");
+      return;
+    }
+  }
+
+  if (flowStarted) return;
+  flowStarted = true;
+
+  setTimeout(() => {
+    runGoatFlow().catch((err) => {
+      console.error("GOAT flow failed:", err);
+
+      reportTaskResult("PURCHASE_FAILED", {
+        errorMessage: err.message
+      });
+    });
+  }, 2000);
+});
+
+async function shouldForceStopRunner() {
+  const data = await chrome.storage.local.get(["forceStop"]);
+  return data.forceStop === true;
+}
+
+async function stopIfNeeded(context = "") {
+  const mustStop = await shouldForceStopRunner();
+
+  if (mustStop) {
+    console.log(`Force stop triggered${context ? ` during ${context}` : ""}`);
+    return true;
+  }
+
+  return false;
+}
+
+async function runGoatFlow() {
+  if (!currentTask) return;
+
+  if (await stopIfNeeded("start")) return;
+
+  console.log("Starting GOAT purchase flow:", currentTask);
+
+  if (currentTask.type === "GOAT_ORDER_SYNC") {
+    await handleGoatOrderSyncPage();
+    return;
+  }
+
+  if (window.location.pathname.includes("/checkout/") && window.location.pathname.includes("/success")) {
+    await handleGoatSuccessPage();
+    return;
+  }
+
+  if (window.location.pathname.includes("/checkout")) {
+    await handleCheckoutPage();
+    return;
+  }
+
+  if (window.location.pathname.includes("/account/preferences")) {
+    await handlePreferencesPage();
+    return;
+  }
+
+  if (!window.location.pathname.includes("/sneakers/")) {
+    if (currentTask.useGoatSearchFallback) {
+      await searchGoatProductBySku(currentTask.sku);
+      return;
+    }
+  
+    window.location.href = currentTask.goatUrl;
+    return;
+  }
+
+  await handleProductPage();
+}
+
 async function searchGoatProductBySku(sku) {
   const searchText = String(sku || "").trim();
 
@@ -194,4 +300,1375 @@ async function searchGoatProductBySku(sku) {
   });
 
   window.location.href = targetUrl;
+}
+async function handleProductPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("product page")) return;
+
+  await verifyProductOrFail();
+
+  const state = await chrome.storage.local.get(["goatBuyReady", "goatResolvedPreference"]);
+  const buyReady = state.goatBuyReady === true;
+  const resolved = state.goatResolvedPreference;
+
+  if (!buyReady) {
+    const sizeType = await detectGoatSizeType();
+    const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
+    const category = sizeTypeToCategory(sizeType);
+
+    if (!targetSize || !category) {
+      await reportTaskResult("SIZE_NOT_FOUND", {
+        errorMessage: `Could not resolve GOAT preference. sizeType=${sizeType}, targetSize=${targetSize}`,
+        boughtSize: ""
+      });
+      return;
+    }
+
+    await chrome.storage.local.set({
+      goatBuyReady: false,
+      goatResolvedPreference: {
+        sizeType,
+        category,
+        targetSize
+      }
+    });
+
+    console.log("ALWAYS going to preferences before buying:", {
+      sizeType,
+      category,
+      targetSize
+    });
+
+    window.location.href = "https://www.goat.com/account/preferences";
+    return;
+  }
+
+  if (!resolved?.targetSize) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+    window.location.href = currentTask.goatUrl;
+    return;
+  }
+
+  const targetSize = resolved.targetSize;
+
+  console.log("Preferences just set. Now opening size panel and buying:", resolved);
+
+  const opened = await openSizePanel();
+
+  if (!opened) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: "Could not open GOAT size panel after preferences save",
+      boughtSize: targetSize
+    });
+    return;
+  }
+
+  await sleep(500);
+
+  const bestPrice = findBestPriceOption();
+
+  if (!bestPrice) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
+    await reportTaskResult("NO_VALID_PRICE", {
+      errorMessage: "Best Price / Under Retail option not found",
+      boughtSize: targetSize
+    });
+    return;
+  }
+
+  const estimatedTotal = bestPrice.price + 15;
+
+  if (estimatedTotal > Number(currentTask.maxBuyingPrice)) {
+    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
+    await reportTaskResult("NO_VALID_PRICE", {
+      errorMessage: `Best Price ${bestPrice.price} + shipping 15 = ${estimatedTotal} exceeds max ${currentTask.maxBuyingPrice}`,
+      finalPrice: estimatedTotal,
+      boughtSize: targetSize
+    });
+    return;
+  }
+
+  await chrome.storage.local.set({
+    goatPendingCheckout: {
+      recordId: currentTask.recordId,
+      sku: currentTask.sku,
+      productName: getProductName(),
+      boughtSize: targetSize,
+      maxBuyingPrice: currentTask.maxBuyingPrice,
+      dryRun: currentTask.dryRun === true
+    }
+  });
+
+  await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
+
+  clickElement(bestPrice.selectButton);
+
+  await sleep(4000);
+}
+
+async function handlePreferencesPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("preferences page")) return;
+
+  const prefData = await chrome.storage.local.get(["goatResolvedPreference"]);
+  const resolved = prefData.goatResolvedPreference;
+
+  if (!resolved?.category || !resolved?.targetSize) {
+    window.location.href = currentTask.goatUrl;
+    return;
+  }
+
+  console.log("Setting GOAT account preferences:", resolved);
+
+  const categoryOk = clickPreferencePageOption(
+    resolved.category,
+    "what category do you shop for most often"
+  );
+
+  await sleep(700);
+
+  const usOk = clickPreferencePageOption(
+    "US",
+    "what size chart do you prefer"
+  );
+
+  await sleep(700);
+
+  const sizeOk = clickPreferencePageOption(
+    resolved.targetSize,
+    "which size fits you best"
+  );
+
+  await sleep(700);
+
+  if (!categoryOk || !usOk || !sizeOk) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `Could not set preferences. category=${categoryOk}, US=${usOk}, size=${sizeOk}`,
+      boughtSize: resolved.targetSize
+    });
+    return;
+  }
+
+  const saveButton = findPreferenceSaveButton();
+
+  if (!saveButton) {
+    await reportTaskResult("PURCHASE_FAILED", {
+      errorMessage: "SAVE button not found on GOAT preferences page",
+      boughtSize: resolved.targetSize
+    });
+    return;
+  }
+
+  clickElement(saveButton);
+
+  await chrome.storage.local.set({
+    goatBuyReady: true,
+    goatResolvedPreference: {
+      sizeType: resolved.sizeType,
+      category: resolved.category,
+      targetSize: resolved.targetSize
+    }
+  });
+
+  await sleep(2500);
+
+  window.location.href = currentTask.goatUrl;
+}
+
+function findPreferenceSaveButton() {
+  const candidates = getVisibleElements("button, [role='button'], div, span")
+    .filter((el) => normalizeText(el.innerText) === "save")
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (ar.width * ar.height) - (br.width * br.height);
+    });
+
+  return candidates[0] || null;
+}
+
+function clickPreferencePageOption(value, headingText) {
+  const section = findPreferenceSection(headingText);
+
+  if (!section) {
+    console.log("Preference section not found:", headingText);
+    return false;
+  }
+
+  const targetText = normalizeText(value);
+  const targetSize = normalizeSize(value);
+
+  const candidates = Array.from(section.querySelectorAll("button, label, div, span"))
+    .filter(isVisible)
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+
+      return {
+        el,
+        text: normalizeText(el.innerText),
+        size: normalizeSize(el.innerText),
+        area: rect.width * rect.height
+      };
+    })
+    .filter((item) => {
+      if (targetSize) return item.size === targetSize && item.area < 5000;
+      return item.text === targetText && item.area < 5000;
+    })
+    .sort((a, b) => a.area - b.area);
+
+  if (!candidates.length) {
+    console.log("Preference option not found:", { value, headingText });
+    return false;
+  }
+
+  console.log("Clicking preference option:", {
+    value,
+    headingText,
+    text: candidates[0].el.innerText
+  });
+
+  clickElementAtCenter(candidates[0].el);
+  return true;
+}
+
+function findPreferenceSection(headingText) {
+  const target = normalizeText(headingText);
+
+  const headings = getVisibleElements("div, p, span, h1, h2, h3, h4")
+    .filter((el) => normalizeText(el.innerText).includes(target))
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.top - br.top;
+    });
+
+  const heading = headings[0];
+  if (!heading) return null;
+
+  let el = heading;
+
+  for (let i = 0; i < 6; i++) {
+    if (!el?.parentElement) break;
+
+    const text = normalizeText(el.parentElement.innerText);
+
+    if (
+      text.includes(target) &&
+      (
+        text.includes("men") ||
+        text.includes("women") ||
+        text.includes("us") ||
+        /\b\d+(\.5)?\b/.test(text)
+      )
+    ) {
+      return el.parentElement;
+    }
+
+    el = el.parentElement;
+  }
+
+  return heading.parentElement;
+}
+
+function sizeTypeToCategory(sizeType) {
+  if (sizeType === "US Women's Size") return "Women";
+  if (sizeType === "US Youth Size") return "Youth";
+  if (sizeType === "US Infant Size") return "Infant";
+  if (sizeType === "US Men's Size") return "Men";
+  return null;
+}
+
+async function waitForGoatSuccessOrderNumber() {
+  for (let i = 0; i < 20; i++) {
+    const orderNumber = extractGoatOrderNumberFromSuccessPage();
+
+    if (orderNumber) {
+      return orderNumber;
+    }
+
+    await sleep(500);
+  }
+
+  return "";
+}
+
+function extractGoatOrderNumberFromSuccessPage() {
+  const pathMatch = window.location.pathname.match(/\/checkout\/(\d+)\/success/i);
+  if (pathMatch?.[1]) return pathMatch[1];
+
+  const queryOrderNumber = new URLSearchParams(window.location.search).get("orderNumber");
+  if (queryOrderNumber) return queryOrderNumber;
+
+  const referrerMatch = String(document.referrer || "").match(/[?&]orderNumber=(\d+)/i);
+  if (referrerMatch?.[1]) return referrerMatch[1];
+
+  const text = document.body.innerText || "";
+  const textMatch = text.match(/Order\s*#\s*(\d{6,})/i);
+  if (textMatch?.[1]) return textMatch[1];
+
+  return "";
+}
+
+async function handleGoatSuccessPage() {
+  await waitForPageReady();
+
+  const successData = await chrome.storage.local.get([
+    "goatSuccessContext",
+    "goatCheckoutFinalPrice"
+  ]);
+  
+  const successContext = successData.goatSuccessContext || {};
+  
+  const boughtSize = successContext.boughtSize || "";
+  const finalPrice = Number(
+    successContext.finalPrice || successData.goatCheckoutFinalPrice || 0
+  );
+  
+  const orderNumber = await waitForGoatSuccessOrderNumber();
+
+  if (!orderNumber) {
+    console.warn("GOAT success page reached but order number not found", {
+      url: window.location.href,
+      pathname: window.location.pathname,
+      search: window.location.search,
+      referrer: document.referrer,
+      bodyText: String(document.body.innerText || "").slice(0, 500)
+    });
+  
+    await reportTaskResult("PURCHASE_FAILED", {
+      finalPrice,
+      boughtSize,
+      errorMessage: "GOAT success page reached, but GOAT order number not found"
+    });
+    return;
+  }
+
+  await reportTaskResult("PURCHASED", {
+    finalPrice,
+    boughtSize,
+    goatOrderNumber: orderNumber,
+    purchasedAt: new Date().toISOString(),
+    errorMessage: ""
+  });
+}
+
+function extractGoatOrderNumber() {
+  const text = document.body.innerText || "";
+
+  const match = text.match(/Order\s*#\s*(\d+)/i);
+  if (match?.[1]) return match[1];
+
+  const urlMatch = window.location.pathname.match(/checkout\/(\d+)\/success/i);
+  if (urlMatch?.[1]) return urlMatch[1];
+
+  return null;
+}
+
+async function handleGoatOrderSyncPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("goat order sync")) return;
+
+  const orderNumber = String(currentTask.goatOrderNumber || "").trim();
+
+  if (!orderNumber) {
+    await reportTaskResult("ORDER_SYNC_FAILED", {
+      errorMessage: "Missing GOAT Order Number"
+    });
+    return;
+  }
+
+  const orderUrl = `https://www.goat.com/account/orders/${orderNumber}`;
+
+  if (!window.location.pathname.includes(`/account/orders/${orderNumber}`)) {
+    window.location.href = orderUrl;
+    return;
+  }
+
+  await sleep(2000);
+
+  const tracking = extractGoatTrackingFromOrderPage();
+  const orderStatus = extractGoatOrderStatusFromOrderPage();
+
+  console.log("GOAT tracking extracted:", tracking);
+  console.log("GOAT order status extracted:", orderStatus);
+
+  if (!tracking.trackingNumber || !tracking.trackingUrl) {
+    await reportTaskResult("ORDER_NOT_READY", {
+      goatOrderNumber: orderNumber,
+      goatOrderStatus: orderStatus,
+      errorMessage: ""
+    });
+
+    return;
+  }
+
+  await reportTaskResult("ORDER_SYNC", {
+    goatOrderNumber: orderNumber,
+    goatTrackingNumber: tracking.trackingNumber,
+    goatTrackingUrl: tracking.trackingUrl,
+    goatOrderStatus: orderStatus,
+    errorMessage: ""
+  });
+}
+
+function extractGoatTrackingFromOrderPage() {
+  const visible = getVisibleElements("div, span, p, a");
+
+  const trackingLabel = visible.find((el) => {
+    return normalizeText(el.innerText) === "tracking";
+  });
+
+  if (!trackingLabel) {
+    return { trackingNumber: "", trackingUrl: "" };
+  }
+
+  const labelRect = trackingLabel.getBoundingClientRect();
+
+  const candidates = visible
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      const text = String(el.innerText || "").trim().replace(/\s+/g, "");
+      const anchor = el.closest("a");
+      const href = anchor?.href || "";
+
+      return { el, rect, text, href };
+    })
+    .filter((item) => {
+      return (
+        looksLikeTrackingNumber(item.text) &&
+        item.rect.top > labelRect.top - 20 &&
+        item.rect.top < labelRect.top + 45 &&
+        item.rect.left > labelRect.left + 50
+      );
+    })
+    .sort((a, b) => {
+      const topDiff = Math.abs(a.rect.top - labelRect.top) - Math.abs(b.rect.top - labelRect.top);
+      if (topDiff !== 0) return topDiff;
+      return a.rect.left - b.rect.left;
+    });
+
+  if (!candidates.length) {
+    return { trackingNumber: "", trackingUrl: "" };
+  }
+
+  const best = candidates[0];
+
+  let trackingUrl = best.href;
+
+  if (!isValidTrackingUrl(trackingUrl)) {
+    const matchingAnchor = getVisibleElements("a").find((a) => {
+      const text = String(a.innerText || "").trim().replace(/\s+/g, "");
+      return text === best.text && isValidTrackingUrl(a.href);
+    });
+
+    trackingUrl = matchingAnchor?.href || "";
+  }
+
+  return {
+    trackingNumber: best.text,
+    trackingUrl
+  };
+}
+
+function extractGoatOrderStatusFromOrderPage() {
+  const lines = (document.body.innerText || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const statusIndex = lines.findIndex((line) => {
+    return normalizeText(line) === "status";
+  });
+
+  if (statusIndex === -1) return "";
+
+  return lines[statusIndex + 1] || "";
+}
+
+function looksLikeTrackingNumber(value) {
+  const text = String(value || "").trim();
+
+  return (
+    /^[A-Z0-9]{8,40}$/i.test(text) ||
+    /^\d{10,40}$/.test(text) ||
+    /^1Z[A-Z0-9]{10,30}$/i.test(text)
+  );
+}
+
+function isValidTrackingUrl(url) {
+  const value = String(url || "").trim();
+
+  if (!value.startsWith("http")) return false;
+
+  const lower = value.toLowerCase();
+
+  if (lower.includes("goat.com/editorial")) return false;
+  if (lower.includes("goat.com/account")) return false;
+  if (lower.includes("goat.com/sneakers")) return false;
+  if (lower.includes("goat.com/wants")) return false;
+  if (lower.includes("goat.com/offers")) return false;
+  if (lower === "https://www.goat.com/" || lower === "https://goat.com/") return false;
+
+  return true;
+}
+
+function detectGoatPaymentFailurePopup() {
+  const text = normalizeText(document.body.innerText || "");
+
+  return (
+    text.includes("insufficient funds") ||
+    text.includes("payment could not be processed") ||
+    text.includes("there was a problem processing your payment") ||
+    text.includes("please try again")
+  );
+}
+
+async function handleCheckoutPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("checkout page")) return;
+
+  const pending = await getPendingCheckout();
+
+  const boughtSize = pending?.boughtSize || "";
+  const maxBuyingPrice = Number(currentTask.maxBuyingPrice);
+
+  const pageText = document.body.innerText || "";
+  const normalizedPageText = normalizeText(pageText);
+
+  const productOk = verifyCheckoutProduct(normalizedPageText);
+  if (!productOk) {
+    await reportTaskResult("PURCHASE_FAILED", {
+      errorMessage: `Product mismatch on checkout. Expected SKU/product: ${currentTask.sku}`,
+      boughtSize
+    });
+    return;
+  }
+
+  const sizeOk = verifyCheckoutSize(pageText, boughtSize);
+  if (!sizeOk) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `Checkout size mismatch. Expected bought size ${boughtSize}`,
+      boughtSize
+    });
+    return;
+  }
+
+  const addressOk = verifyAddress(currentTask.merchant?.goatAddress);
+  if (!addressOk) {
+    await reportTaskResult("ADDRESS_MISMATCH", {
+      errorMessage: `GOAT address mismatch. Expected: ${currentTask.merchant?.goatAddress || ""}`,
+      boughtSize
+    });
+    return;
+  }
+
+  const paymentOk = selectAndVerifyPayment(
+    currentTask.merchant?.paymentMethod,
+    currentTask.merchant?.creditcardLast4
+  );
+
+  if (!paymentOk) {
+    await reportTaskResult("PAYMENT_MISMATCH", {
+      errorMessage: `GOAT payment mismatch. Expected ${currentTask.merchant?.paymentMethod || ""} ${currentTask.merchant?.creditcardLast4 || ""}`,
+      boughtSize
+    });
+    return;
+  }
+
+  await waitAfterPaymentClick(currentTask.merchant?.creditcardLast4);
+
+  const finalPrice = extractCheckoutTotal();
+
+  if (!Number.isFinite(finalPrice)) {
+    await reportTaskResult("PURCHASE_FAILED", {
+      errorMessage: "Could not extract GOAT checkout total",
+      boughtSize
+    });
+    return;
+  }
+
+  if (finalPrice > maxBuyingPrice) {
+    await reportTaskResult("NO_VALID_PRICE", {
+      errorMessage: `Checkout total ${finalPrice} exceeds max ${maxBuyingPrice}`,
+      finalPrice,
+      boughtSize
+    });
+    return;
+  }
+
+  const placeOrderButton = findButtonByText("securely place order");
+
+  if (!placeOrderButton) {
+    await reportTaskResult("PURCHASE_FAILED", {
+      errorMessage: "Securely Place Order button not found",
+      finalPrice,
+      boughtSize
+    });
+    return;
+  }
+
+  if (currentTask.dryRun === true) {
+    console.log("DRY_RUN enabled. Not clicking Securely Place Order.");
+
+    await reportTaskResult("PURCHASED", {
+      finalPrice,
+      boughtSize,
+      errorMessage: "DRY_RUN: checkout validated, order not actually placed"
+    });
+
+    return;
+  }
+
+  await chrome.storage.local.set({
+    goatCheckoutFinalPrice: finalPrice,
+    goatSuccessContext: {
+      recordId: currentTask.recordId,
+      sku: currentTask.sku,
+      boughtSize,
+      finalPrice,
+      maxBuyingPrice: currentTask.maxBuyingPrice,
+      dryRun: currentTask.dryRun === true
+    }
+  });
+  
+  await chrome.storage.local.set({
+    goatCheckoutFinalPrice: finalPrice,
+    goatSuccessContext: {
+      recordId: currentTask.recordId,
+      sku: currentTask.sku,
+      boughtSize,
+      finalPrice,
+      maxBuyingPrice: currentTask.maxBuyingPrice,
+      dryRun: currentTask.dryRun === true
+    }
+  });
+  
+  clickElement(placeOrderButton);
+  
+  for (let i = 0; i < 20; i++) {
+    await sleep(1000);
+  
+    if (detectGoatPaymentFailurePopup()) {
+      await reportTaskResult("PAYMENT_MISMATCH", {
+        finalPrice,
+        boughtSize,
+        errorMessage: "GOAT payment failed: insufficient funds / payment could not be processed"
+      });
+      return;
+    }
+  
+    if (window.location.pathname.includes("/success")) {
+      return;
+    }
+  }
+  
+  await reportTaskResult("PURCHASE_FAILED", {
+    finalPrice,
+    boughtSize,
+    errorMessage: "Clicked Securely Place Order but did not reach GOAT success page"
+  });
+  return;
+}
+
+async function getPendingCheckout() {
+  const data = await chrome.storage.local.get(["goatPendingCheckout"]);
+  return data.goatPendingCheckout || null;
+}
+
+async function waitForPageReady(attempt = 0) {
+  if (attempt > 30) return;
+
+  if (document.body && document.body.innerText.length > 100) {
+    return;
+  }
+
+  await sleep(1000);
+  return waitForPageReady(attempt + 1);
+}
+
+async function verifyProductOrFail() {
+  const expectedSku = normalizeText(currentTask.sku);
+  const bodyText = normalizeText(document.body.innerText || "");
+
+  if (bodyText.includes(expectedSku)) {
+    return true;
+  }
+
+  console.warn("SKU not visible on GOAT page. Continuing with slug/product title validation only.");
+  return true;
+}
+
+function getProductName() {
+  const candidates = Array.from(document.querySelectorAll("h1, h2, div, span"))
+    .map((el) => String(el.innerText || "").trim())
+    .filter((text) => text.length > 5 && text.length < 120);
+
+  return candidates[0] || "";
+}
+
+async function detectGoatSizeType() {
+  console.log("Detecting GOAT size type...");
+
+  const opened = await openSizePanel();
+
+  if (!opened) {
+    throw new Error("Could not open GOAT size panel");
+  }
+
+  const label = findSizePreferenceLabel();
+
+  if (!label) {
+    throw new Error("Could not find GOAT size preference label");
+  }
+
+  const fullText = normalizeText(label.innerText || label.textContent);
+
+  const primaryText = fullText.includes("/")
+    ? fullText.split("/")[0].trim()
+    : fullText;
+
+  console.log("Detected GOAT size label:", {
+    fullText,
+    primaryText
+  });
+
+  if (primaryText.includes("women")) return "US Women's Size";
+  if (primaryText.includes("youth")) return "US Youth Size";
+  if (primaryText.includes("infant")) return "US Infant Size";
+  if (primaryText.includes("men")) return "US Men's Size";
+
+  throw new Error(`Could not detect GOAT size type from label: ${label.innerText}`);
+}
+
+function resolveTargetSize(sizeType, sizeMap) {
+  if (!sizeMap) return null;
+
+  if (sizeType === "US Women's Size") {
+    return cleanSize(sizeMap.usWomensSize);
+  }
+
+  if (sizeType === "US Youth Size") {
+    return cleanSize(sizeMap.usGsSize);
+  }
+
+  if (sizeType === "US Infant Size") {
+    return cleanSize(sizeMap.usPsSize || sizeMap.usTdSize);
+  }
+
+  return cleanSize(sizeMap.usSize);
+}
+
+function clickAtPoint(x, y) {
+  const el = document.elementFromPoint(x, y) || document.body;
+
+  console.log("ClickAtPoint target:", {
+    tag: el.tagName,
+    text: String(el.innerText || "").slice(0, 80),
+    x,
+    y
+  });
+
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    const EventClass = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+
+    el.dispatchEvent(new EventClass(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      view: window
+    }));
+  }
+
+  if (typeof el.click === "function") {
+    el.click();
+  }
+}
+
+function isVisible(el) {
+  const rect = el.getBoundingClientRect();
+  const style = window.getComputedStyle(el);
+
+  return (
+    style.visibility !== "hidden" &&
+    style.display !== "none" &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+function findSizePreferenceLabel() {
+  const matches = getVisibleElements("button, div, span")
+    .map((el) => {
+      const text = normalizeText(el.innerText || el.textContent);
+      const rect = el.getBoundingClientRect();
+
+      return {
+        el,
+        text,
+        area: rect.width * rect.height
+      };
+    })
+    .filter((item) => {
+      return (
+        (
+          item.text.includes("us men's size") ||
+          item.text.includes("us mens size") ||
+          item.text.includes("us men's sizes") ||
+          item.text.includes("us mens sizes") ||
+          item.text.includes("us women's size") ||
+          item.text.includes("us womens size") ||
+          item.text.includes("us women's sizes") ||
+          item.text.includes("us womens sizes") ||
+          item.text.includes("us youth size") ||
+          item.text.includes("us youth sizes") ||
+          item.text.includes("us infant size") ||
+          item.text.includes("us infant sizes")
+        ) &&
+        item.area < 50000
+      );
+    })
+    .sort((a, b) => a.area - b.area);
+
+  console.log("GOAT size preference label candidates:", matches.map((m) => m.text));
+
+  return matches[0]?.el || null;
+}
+
+async function openSizePanel() {
+  console.log("Opening GOAT size panel...", {
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight
+  });
+
+  window.scrollTo({
+    top: document.documentElement.scrollHeight,
+    behavior: "instant"
+  });
+
+  await sleep(500);
+
+  // This purchase flow navigates product -> preferences -> product.
+  // Store the successful hover point in chrome.storage so it survives navigation.
+  const stored = await chrome.storage.local.get("goatWorkingHoverPoint");
+  const cachedPoint = stored.goatWorkingHoverPoint || null;
+
+  if (cachedPoint?.xRatio && cachedPoint?.bottomOffset) {
+    const x = window.innerWidth * cachedPoint.xRatio;
+    const y = window.innerHeight - cachedPoint.bottomOffset;
+
+    console.log("Trying cached GOAT hover point:", {
+      x,
+      y,
+      ...cachedPoint
+    });
+
+    moveMouseAt(x, y);
+    await sleep(250);
+
+    if (findSizePreferenceLabel()) {
+      console.log("Cached GOAT hover point worked immediately");
+      return true;
+    }
+
+    console.log("Cached GOAT hover point failed; clearing it");
+    await chrome.storage.local.remove("goatWorkingHoverPoint");
+  }
+
+  const priorityPoints = [
+    { xRatio: 0.50, bottomOffset: 100 },
+    { xRatio: 0.60, bottomOffset: 100 },
+    { xRatio: 0.70, bottomOffset: 100 },
+    { xRatio: 0.50, bottomOffset: 120 },
+    { xRatio: 0.60, bottomOffset: 120 },
+    { xRatio: 0.70, bottomOffset: 120 },
+    { xRatio: 0.50, bottomOffset: 80 },
+    { xRatio: 0.60, bottomOffset: 80 },
+    { xRatio: 0.70, bottomOffset: 80 }
+  ];
+
+  for (const point of priorityPoints) {
+    const x = window.innerWidth * point.xRatio;
+    const y = window.innerHeight - point.bottomOffset;
+
+    console.log("Trying GOAT priority hover point:", { x, y, ...point });
+
+    moveMouseAt(x, y);
+    await sleep(180);
+
+    if (findSizePreferenceLabel()) {
+      await chrome.storage.local.set({
+        goatWorkingHoverPoint: point
+      });
+
+      console.log("GOAT size panel opened at priority point:", point);
+      return true;
+    }
+  }
+
+  const fallbackXRatios = [0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85];
+  const fallbackBottomOffsets = [60, 80, 100, 120, 140, 160, 180];
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(`GOAT fallback hover attempt ${attempt}/3`);
+
+    for (const bottomOffset of fallbackBottomOffsets) {
+      const y = window.innerHeight - bottomOffset;
+
+      for (const xRatio of fallbackXRatios) {
+        const x = window.innerWidth * xRatio;
+
+        moveMouseAt(x, y);
+        await sleep(180);
+
+        if (findSizePreferenceLabel()) {
+          const workingPoint = { xRatio, bottomOffset };
+
+          await chrome.storage.local.set({
+            goatWorkingHoverPoint: workingPoint
+          });
+
+          console.log("GOAT size panel opened during fallback:", {
+            attempt,
+            ...workingPoint
+          });
+
+          return true;
+        }
+      }
+    }
+
+    window.scrollBy({
+      top: attempt % 2 === 0 ? -150 : 150,
+      behavior: "instant"
+    });
+
+    await sleep(400);
+  }
+
+  console.error("GOAT size panel did not open");
+  return false;
+}
+
+
+function getSizeSliderBounds() {
+  const tileCandidates = getVisibleElements("button, div, span").filter((el) => {
+    const rect = el.getBoundingClientRect();
+    const raw = String(el.innerText || "").trim();
+    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+
+    return (
+      rect.top > window.innerHeight * 0.55 &&
+      rect.top < window.innerHeight * 0.9 &&
+      rect.width <= 100 &&
+      rect.height <= 80 &&
+      lines.length >= 2 &&
+      /\b\d+(\.5)?\b/.test(lines[0]) &&
+      /€\s*\d+/.test(raw)
+    );
+  });
+
+  if (!tileCandidates.length) return null;
+
+  const rects = tileCandidates.map((el) => el.getBoundingClientRect());
+
+  return {
+    left: Math.min(...rects.map((r) => r.left)) - 80,
+    right: Math.max(...rects.map((r) => r.right)) + 80,
+    top: Math.min(...rects.map((r) => r.top)) - 50,
+    bottom: Math.max(...rects.map((r) => r.bottom)) + 50
+  };
+}
+
+function findBestPriceOption() {
+  const buttons = getVisibleElements("button").filter((btn) => {
+    return normalizeText(btn.innerText) === "select";
+  });
+
+  for (const button of buttons) {
+    const row = findPriceRowForSelectButton(button);
+    if (!row) continue;
+
+    const text = normalizeText(row.innerText);
+
+    if (!text.includes("best price") && !text.includes("under retail")) continue;
+    if (text.includes("instant")) continue;
+
+    const price = extractFirstEuroPrice(row.innerText);
+
+    if (Number.isFinite(price)) {
+      return {
+        price,
+        row,
+        selectButton: button
+      };
+    }
+  }
+
+  return null;
+}
+
+function findPriceRowForSelectButton(button) {
+  let el = button;
+
+  for (let i = 0; i < 6; i++) {
+    if (!el) return null;
+
+    const text = normalizeText(el.innerText || "");
+    const raw = el.innerText || "";
+
+    if (
+      /€\s*\d+/.test(raw) &&
+      (text.includes("best price") || text.includes("under retail") || text.includes("instant"))
+    ) {
+      return el;
+    }
+
+    el = el.parentElement;
+  }
+
+  return null;
+}
+
+function verifyCheckoutProduct(normalizedPageText) {
+  const sku = normalizeText(currentTask.sku);
+
+  if (sku && normalizedPageText.includes(sku)) return true;
+
+  const urlSlugText = normalizeText(currentTask.goatUrl.split("/").pop() || "")
+    .replace(/-/g, " ");
+
+  if (urlSlugText && normalizedPageText.includes(urlSlugText.slice(0, 20))) {
+    return true;
+  }
+
+  return true;
+}
+
+function verifyCheckoutSize(rawText, boughtSize) {
+  const normalized = normalizeText(rawText);
+  const size = normalizeSize(boughtSize);
+
+  if (!size) return false;
+
+  const patterns = [
+    `size: us ${size}`,
+    `size us ${size}`,
+    `size: ${size}`,
+    `size ${size}`,
+    `size: us women's ${size}`,
+    `size us women's ${size}`,
+    `size: us womens ${size}`,
+    `size us womens ${size}`,
+    `size: us men's ${size}`,
+    `size us men's ${size}`,
+    `size: us mens ${size}`,
+    `size us mens ${size}`,
+    `size: us youth ${size}`,
+    `size us youth ${size}`,
+    `size: us infant ${size}`,
+    `size us infant ${size}`
+  ];
+
+  return patterns.some((pattern) => normalized.includes(pattern));
+}
+
+function verifyAddress(expectedAddress) {
+  const expected = normalizeText(expectedAddress);
+
+  if (!expected) return false;
+
+  const selectedAddressBlocks = getVisibleElements("div, section").filter((el) => {
+    const text = normalizeText(el.innerText);
+    const rect = el.getBoundingClientRect();
+
+    return (
+      rect.left < window.innerWidth * 0.65 &&
+      text.includes("shipping address") === false &&
+      text.includes(expected)
+    );
+  });
+
+  return selectedAddressBlocks.length > 0 || normalizeText(document.body.innerText).includes(expected);
+}
+
+function selectAndVerifyPayment(method, last4) {
+  const normalizedMethod = normalizeText(method);
+  const normalizedLast4 = normalizeText(last4);
+
+  console.log("Selecting GOAT payment:", {
+    method,
+    last4,
+    normalizedLast4
+  });
+
+  if (
+    normalizedMethod.includes("creditcard") ||
+    normalizedMethod.includes("credit card") ||
+    normalizedMethod.includes("card")
+  ) {
+    if (!normalizedLast4) return false;
+
+    const cardCandidates = getVisibleElements("button, div, span").filter((el) => {
+      const text = normalizeText(el.innerText);
+      return text.includes(normalizedLast4);
+    });
+
+    console.log("GOAT card candidates:", cardCandidates.map((el) => el.innerText));
+
+    if (!cardCandidates.length) return false;
+
+    const bestCard = cardCandidates
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        return {
+          el,
+          text: normalizeText(el.innerText),
+          area: rect.width * rect.height
+        };
+      })
+      .filter((item) => item.text.includes(normalizedLast4))
+      .sort((a, b) => a.area - b.area)[0]?.el;
+    
+    if (!bestCard) return false;
+    
+    clickElementAtCenter(bestCard);
+    return true;
+  }
+
+  return false;
+}
+
+function extractCheckoutTotal() {
+  const raw = document.body.innerText || "";
+  const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (normalizeText(lines[i]) === "total") {
+      const value = extractFirstEuroPrice(lines[i + 1]);
+      if (Number.isFinite(value)) return value;
+    }
+  }
+
+  const fallback = raw.match(/Total[\s\S]{0,80}?€\s*([\d.,]+)/i);
+
+  if (fallback?.[1]) {
+    return parseMoney(fallback[1]);
+  }
+
+  return null;
+}
+
+function extractFirstEuroPrice(text) {
+  const match = String(text || "").match(/€\s*([\d.,]+)/);
+  if (!match?.[1]) return null;
+
+  return parseMoney(match[1]);
+}
+
+function parseMoney(raw) {
+  const cleaned = String(raw || "")
+    .replace(/[^\d.,-]/g, "")
+    .replace(",", ".");
+
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function waitAfterPaymentClick(last4) {
+  console.log("Waiting after selecting GOAT payment:", last4);
+  await sleep(2500);
+}
+
+function findButtonByText(targetText) {
+  const target = normalizeText(targetText);
+
+  return getVisibleElements("button, [role='button'], div")
+    .filter((el) => {
+      const text = normalizeText(el.innerText);
+      const disabled =
+        el.disabled === true ||
+        el.getAttribute("aria-disabled") === "true" ||
+        el.getAttribute("disabled") !== null;
+
+      return text === target && !disabled;
+    })
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return ar.width * ar.height - br.width * br.height;
+    })[0] || null;
+}
+
+function findElementByText(targetText) {
+  const target = normalizeText(targetText);
+
+  return getVisibleElements("button, div, span").find((el) => {
+    return normalizeText(el.innerText).includes(target);
+  }) || null;
+}
+
+function getVisibleElements(selector) {
+  return Array.from(document.querySelectorAll(selector)).filter((el) => {
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+
+    return (
+      style.visibility !== "hidden" &&
+      style.display !== "none" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  });
+}
+
+function moveMouseAt(x, y) {
+  const el = document.elementFromPoint(x, y) || document.body;
+
+  console.log("Mouse target element:", {
+    tag: el.tagName,
+    text: String(el.innerText || "").slice(0, 80),
+    x,
+    y
+  });
+
+  for (const type of [
+    "pointerover",
+    "pointerenter",
+    "mouseover",
+    "mouseenter",
+    "pointermove",
+    "mousemove"
+  ]) {
+    el.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      view: window
+    }));
+  }
+}
+
+function clickElement(el) {
+  if (!el) return false;
+
+  el.scrollIntoView({
+    block: "center",
+    inline: "center"
+  });
+
+  const rect = el.getBoundingClientRect();
+
+  el.dispatchEvent(new MouseEvent("mousedown", {
+    bubbles: true,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2
+  }));
+
+  el.dispatchEvent(new MouseEvent("mouseup", {
+    bubbles: true,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2
+  }));
+
+  el.dispatchEvent(new MouseEvent("click", {
+    bubbles: true,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2
+  }));
+
+  return true;
+}
+
+function clickElementAtCenter(el) {
+  if (!el) return false;
+
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+
+  clickAtPoint(x, y);
+  return true;
+}
+
+async function reportTaskResult(status, extra = {}) {
+  const payload = {
+    recordId: currentTask.recordId,
+
+    status,
+
+    finalPrice: extra.finalPrice || null,
+    boughtSize: extra.boughtSize || "",
+
+    errorMessage: extra.errorMessage || "",
+
+    goatOrderNumber: extra.goatOrderNumber || "",
+    goatTrackingNumber: extra.goatTrackingNumber || "",
+    goatTrackingUrl: extra.goatTrackingUrl || "",
+    purchasedAt: extra.purchasedAt || "",
+    goatOrderStatus: extra.goatOrderStatus || ""
+  };
+
+  console.log("Reporting GOAT task result:", payload);
+
+  const result = await chrome.runtime.sendMessage({
+    type: "TASK_COMPLETED",
+    payload
+  });
+  
+  if (!result?.ok) {
+    console.error("TASK_COMPLETED failed:", result);
+  }
+  
+  await chrome.storage.local.remove([
+    "goatPendingCheckout",
+    "goatCheckoutFinalPrice",
+    "goatSuccessContext"
+  ]);
+  
+  return result;
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(",", ".")
+    .replace(/\s+/g, " ");
+}
+
+function normalizeSize(value) {
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(",", ".");
+
+  const match = text.match(/\b\d+(\.5)?\b/);
+  return match ? match[0] : "";
+}
+
+function cleanSize(value) {
+  if (value === undefined || value === null || value === "") return null;
+  return String(value).trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
