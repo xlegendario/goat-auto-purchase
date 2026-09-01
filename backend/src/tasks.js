@@ -118,36 +118,9 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
     throw new Error("runnerName is required");
   }
 
-  const orderSyncRecords = await fetchGoatOrderSyncCandidates();
-  
-  const eligibleOrderSync = sortOldestFirst(
-    orderSyncRecords.filter((record) => {
-      return recordMatchesRunner(
-        record.fields,
-        normalizedRunnerName,
-        normalizedAccountGroupKey
-      );
-    })
-  );
-  
-  if (eligibleOrderSync.length) {
-    const record = eligibleOrderSync[0];
-    const f = record.fields;
-    const goatOrderNumber = getGoatOrderNumber(f);
-  
-    return {
-      type: "GOAT_ORDER_SYNC",
-      recordId: record.id,
-      goatOrderNumber,
-      goatOrderUrl: `https://www.goat.com/account/orders/${goatOrderNumber}`,
-      runner: {
-        runnerName: normalizedRunnerName,
-        accountGroupKey: normalizedAccountGroupKey,
-        accountMode: getGoatAccountMode(f)
-      }
-    };
-  }
-  
+  /*
+   * 1. EERST NIEUWE GOAT PURCHASES
+   */
   const records = await fetchGoatPurchaseCandidates();
 
   const eligible = sortOldestFirst(
@@ -160,87 +133,130 @@ export async function getNextTask({ runnerName, accountGroupKey }) {
     })
   );
 
-  if (!eligible.length) return null;
+  if (eligible.length) {
+    const record = eligible[0];
+    const f = record.fields;
 
-  const record = eligible[0];
-  const f = record.fields;
+    const sku = getSku(f);
+    const brand = getBrand(f);
+    const euSize = normalizeLookup(f["Size"]);
+    const maxBuyingPrice = parseMoney(f["Maximum Buying Price"]);
 
-  const sku = getSku(f);
-  const brand = getBrand(f);
-  const euSize = normalizeLookup(f["Size"]);
-  const maxBuyingPrice = parseMoney(f["Maximum Buying Price"]);
+    if (!sku || !brand || !euSize || !Number.isFinite(maxBuyingPrice)) {
+      await failRecord(
+        record.id,
+        STATUS.FAILED,
+        "Missing required fields: SKU, Brand, Size or Maximum Buying Price"
+      );
 
-  if (!sku || !brand || !euSize || !Number.isFinite(maxBuyingPrice)) {
-    await failRecord(
-      record.id,
-      STATUS.FAILED,
-      "Missing required fields: SKU, Brand, Size or Maximum Buying Price"
-    );
-
-    return null;
-  }
-
-  let resolved;
-  let useGoatSearchFallback = false;
-  
-  try {
-    resolved = await resolveGoatUrlBySku(sku);
-  } catch (err) {
-    console.warn("Retailed GOAT lookup failed, using GOAT search fallback:", err.message);
-  
-    resolved = {
-      goatUrl: "https://www.goat.com",
-      slug: null,
-      matchedSku: null,
-      raw: null
-    };
-  
-    useGoatSearchFallback = true;
-  }
-
-  const sizeRow = await fetchSizeRow(brand, euSize);
-
-  if (!sizeRow) {
-    await failRecord(
-      record.id,
-      STATUS.SIZE_NOT_FOUND,
-      `Size normalization not found for Brand=${brand}, EU Size=${euSize}`
-    );
-
-    return null;
-  }
-
-  const sizeMap = buildSizeMap(sizeRow);
-
-  await updateOrder(record.id, {
-    "GOAT LastAction": STATUS.IN_PROGRESS,
-    "GOAT ErrorMessage": ""
-  });
-
-  return {
-    type: "GOAT_PURCHASE",
-    recordId: record.id,
-
-    sku,
-    brand,
-    euSize,
-    maxBuyingPrice,
-
-    goatUrl: resolved.goatUrl,
-    useGoatSearchFallback,
-
-    sizeMap,
-
-    merchant: {
-      goatAddress: normalizeLookup(f["GOAT Address"]) || "",
-      paymentMethod: normalizeLookup(f["GOAT Payment Method"]) || "",
-      creditcardLast4: normalizeLookup(f["GOAT Creditcard"]) || ""
-    },
-
-    runner: {
-      runnerName: normalizedRunnerName,
-      accountGroupKey: normalizedAccountGroupKey,
-      accountMode: getGoatAccountMode(f)
+      return null;
     }
-  };
+
+    let resolved;
+    let useGoatSearchFallback = false;
+
+    try {
+      resolved = await resolveGoatUrlBySku(sku);
+    } catch (err) {
+      console.warn(
+        "Retailed GOAT lookup failed, using GOAT search fallback:",
+        err.message
+      );
+
+      resolved = {
+        goatUrl: "https://www.goat.com",
+        slug: null,
+        matchedSku: null,
+        raw: null
+      };
+
+      useGoatSearchFallback = true;
+    }
+
+    const sizeRow = await fetchSizeRow(brand, euSize);
+
+    if (!sizeRow) {
+      await failRecord(
+        record.id,
+        STATUS.SIZE_NOT_FOUND,
+        `Size normalization not found for Brand=${brand}, EU Size=${euSize}`
+      );
+
+      return null;
+    }
+
+    const sizeMap = buildSizeMap(sizeRow);
+
+    await updateOrder(record.id, {
+      "GOAT LastAction": STATUS.IN_PROGRESS,
+      "GOAT ErrorMessage": ""
+    });
+
+    return {
+      type: "GOAT_PURCHASE",
+      recordId: record.id,
+
+      sku,
+      brand,
+      euSize,
+      maxBuyingPrice,
+
+      goatUrl: resolved.goatUrl,
+      useGoatSearchFallback,
+
+      sizeMap,
+
+      merchant: {
+        goatAddress: normalizeLookup(f["GOAT Address"]) || "",
+        paymentMethod: normalizeLookup(f["GOAT Payment Method"]) || "",
+        creditcardLast4: normalizeLookup(f["GOAT Creditcard"]) || ""
+      },
+
+      runner: {
+        runnerName: normalizedRunnerName,
+        accountGroupKey: normalizedAccountGroupKey,
+        accountMode: getGoatAccountMode(f)
+      }
+    };
+  }
+
+  /*
+   * 2. PAS ALS ER GEEN PURCHASES ZIJN:
+   * GOAT ORDER SYNC
+   */
+  const orderSyncRecords = await fetchGoatOrderSyncCandidates();
+
+  const eligibleOrderSync = sortOldestFirst(
+    orderSyncRecords.filter((record) => {
+      return recordMatchesRunner(
+        record.fields,
+        normalizedRunnerName,
+        normalizedAccountGroupKey
+      );
+    })
+  );
+
+  if (eligibleOrderSync.length) {
+    const record = eligibleOrderSync[0];
+    const f = record.fields;
+    const goatOrderNumber = getGoatOrderNumber(f);
+
+    return {
+      type: "GOAT_ORDER_SYNC",
+      recordId: record.id,
+      goatOrderNumber,
+      goatOrderUrl: `https://www.goat.com/account/orders/${goatOrderNumber}`,
+
+      runner: {
+        runnerName: normalizedRunnerName,
+        accountGroupKey: normalizedAccountGroupKey,
+        accountMode: getGoatAccountMode(f)
+      }
+    };
+  }
+
+  /*
+   * 3. GEEN PURCHASE + GEEN SYNC
+   */
+  return null;
 }
