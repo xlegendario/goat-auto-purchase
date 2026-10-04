@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import routes from "./routes.js";
+import { startRunnerHealthChecks } from "./runnerHealth.js";
 
 dotenv.config();
 
@@ -17,6 +18,8 @@ app.get("/health", (req, res) => {
 app.use("/", routes);
 
 const port = process.env.PORT || 3000;
+
+startRunnerHealthChecks();
 
 app.listen(port, () => {
   console.log(`GOAT backend running on port ${port}`);

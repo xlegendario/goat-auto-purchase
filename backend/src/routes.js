@@ -1,6 +1,7 @@
 import express from "express";
 import { getNextTask } from "./tasks.js";
 import { submitTaskResult } from "./results.js";
+import { recordHeartbeat, getRunnerHealth } from "./runnerHealth.js";
 
 const router = express.Router();
 
@@ -51,6 +52,19 @@ router.post("/tasks/:recordId/result", async (req, res) => {
       error: err.message
     });
   }
+});
+
+router.post("/runner/heartbeat", (req, res) => {
+  try {
+    recordHeartbeat(req.body);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+router.get("/runner/health", (req, res) => {
+  res.json({ ok: true, runners: getRunnerHealth() });
 });
 
 export default router;
