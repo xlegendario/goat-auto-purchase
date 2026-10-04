@@ -3,7 +3,18 @@ console.log("GOAT Auto Purchase content script loaded");
 let currentTask = null;
 let flowStarted = false;
 
-window.addEventListener("load", async () => {
+/*
+ * Content scripts are injected at document_idle, which can be after the load
+ * event has already fired. A plain load listener then never runs and the
+ * task is never handled, so run straight away when the page is complete.
+ */
+if (document.readyState === "complete") {
+  onPageReady();
+} else {
+  window.addEventListener("load", onPageReady, { once: true });
+}
+
+async function onPageReady() {
   const stored = await chrome.storage.local.get("currentTask");
   currentTask = stored.currentTask || null;
 
@@ -46,7 +57,7 @@ window.addEventListener("load", async () => {
       });
     });
   }, 2000);
-});
+}
 
 async function shouldForceStopRunner() {
   const data = await chrome.storage.local.get(["forceStop"]);

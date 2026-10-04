@@ -4,11 +4,27 @@ let isRunnerEnabled = false;
 let isTaskInProgress = false;
 let isRunLoopActive = false;
 let currentTaskStartedAt = null;
+let runLoopStartedAt = null;
 
 const LOOP_DELAY_MS = 8000;
 const ERROR_RETRY_DELAY_MS = 15000;
 const TASK_TIMEOUT_MS = 180000;
+const FETCH_TIMEOUT_MS = 30000;
+const RUN_LOOP_STALE_MS = 90000;
 const RUNNER_ALARM_NAME = "goat-runner-loop";
+
+/*
+ * The runner loop is a chain of one-shot alarms. It broke whenever a
+ * /tasks/next request hung (no timeout, so the loop stayed flagged as active
+ * and skipped every later trigger) or an opened task never reported back.
+ * Either way the runner sat idle until Start Runner was clicked again - and
+ * the quieter the queue, the more polls, the more chances to hit it.
+ *
+ * This periodic alarm does not depend on anything finishing. Every minute it
+ * runs the loop, which times out a stuck task and moves on.
+ */
+const WATCHDOG_ALARM_NAME = "goat-runner-watchdog";
+const WATCHDOG_PERIOD_MINUTES = 1;
 
 function resetInProgressState() {
   isTaskInProgress = false;
@@ -22,6 +38,45 @@ async function clearCurrentTaskState() {
     currentTask: null,
     currentTaskStartedAt: null
   });
+}
+
+async function ensureWatchdog() {
+  const existing = await chrome.alarms.get(WATCHDOG_ALARM_NAME);
+  if (existing) return;
+
+  await chrome.alarms.create(WATCHDOG_ALARM_NAME, {
+    delayInMinutes: WATCHDOG_PERIOD_MINUTES,
+    periodInMinutes: WATCHDOG_PERIOD_MINUTES
+  });
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`Request timed out after ${FETCH_TIMEOUT_MS}ms: ${url}`);
+    }
+
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function describeRunnerTab() {
+  const { runnerTabId } = await chrome.storage.local.get(["runnerTabId"]);
+  if (!runnerTabId) return "no runner tab";
+
+  try {
+    const tab = await chrome.tabs.get(runnerTabId);
+    return `${tab.url || "?"} (${tab.title || "no title"})`;
+  } catch {
+    return "runner tab closed";
+  }
 }
 
 async function loadState() {
@@ -55,7 +110,39 @@ async function recoverIfTaskTimedOut() {
   if (elapsed < TASK_TIMEOUT_MS) return false;
 
   console.warn("GOAT task timed out, clearing local state");
+
+  const { currentTask } = await chrome.storage.local.get(["currentTask"]);
+  const where = await describeRunnerTab();
+
   await clearCurrentTaskState();
+
+  /*
+   * A purchase that timed out may have gone through, so it is not reported:
+   * the record stays PURCHASE_IN_PROGRESS and is not handed out again, which
+   * rules out buying twice. It does need a human look - see lastTimeoutTask.
+   * An order sync is only a read, so it is reported and the queue rotates.
+   */
+  if (currentTask?.recordId && currentTask.type === "GOAT_ORDER_SYNC") {
+    try {
+      await submitTaskResult({
+        recordId: currentTask.recordId,
+        status: "ORDER_SYNC_FAILED",
+        errorMessage: `Runner timeout after ${TASK_TIMEOUT_MS / 1000}s; last page: ${where}`
+      });
+    } catch (err) {
+      console.error("Could not report timed-out order sync:", err);
+    }
+  }
+
+  const { timeoutRecoveries = 0 } = await chrome.storage.local.get(["timeoutRecoveries"]);
+  await chrome.storage.local.set({
+    timeoutRecoveries: timeoutRecoveries + 1,
+    lastTimeoutAt: new Date().toISOString(),
+    lastTimeoutTask: currentTask
+      ? { recordId: currentTask.recordId, type: currentTask.type, sku: currentTask.sku || null, lastPage: where }
+      : null
+  });
+
   return true;
 }
 
@@ -104,13 +191,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "GET_RUNNER_STATUS") {
     loadState().then(async () => {
-      const data = await chrome.storage.local.get(["forceStop"]);
+      const data = await chrome.storage.local.get([
+        "forceStop",
+        "lastLoopAt",
+        "lastResultAt",
+        "lastErrorAt",
+        "lastError",
+        "timeoutRecoveries",
+        "lastTimeoutAt",
+        "lastTimeoutTask"
+      ]);
+      const watchdog = await chrome.alarms.get(WATCHDOG_ALARM_NAME);
 
       sendResponse({
         ok: true,
         isRunnerEnabled,
         isTaskInProgress,
         forceStop: data.forceStop === true,
+        watchdogActive: !!watchdog,
+        lastLoopAt: data.lastLoopAt || null,
+        lastResultAt: data.lastResultAt || null,
+        lastErrorAt: data.lastErrorAt || null,
+        lastError: data.lastError || null,
+        timeoutRecoveries: data.timeoutRecoveries || 0,
+        lastTimeoutAt: data.lastTimeoutAt || null,
+        lastTimeoutTask: data.lastTimeoutTask || null,
         config: {
           backendUrl: CONFIG.BACKEND_URL,
           runnerName: CONFIG.RUNNER_NAME,
@@ -127,12 +232,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     submitTaskResult(message.payload)
       .then(async (result) => {
         await clearCurrentTaskState();
-  
+        await chrome.storage.local.set({ lastResultAt: new Date().toISOString() });
+
         await loadState();
-  
+
         if (isRunnerEnabled) {
           await scheduleNextRun(3000);
-          setTimeout(() => runLoop().catch(console.error), 3000);
         } else {
           console.warn("TASK_COMPLETED submitted, but runnerEnabled is false after loadState");
         }
@@ -141,8 +246,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .catch(async (err) => {
         console.error("TASK_COMPLETED failed:", err);
-  
+
         await clearCurrentTaskState();
+        await chrome.storage.local.set({
+          lastErrorAt: new Date().toISOString(),
+          lastError: `Result submit failed: ${err.message}`
+        });
   
         await loadState();
   
@@ -157,17 +266,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== RUNNER_ALARM_NAME) return;
-
+function runLoopSafely(source) {
   runLoop().catch(async (err) => {
-    console.error("GOAT runner loop error:", err);
+    console.error(`GOAT runner loop error (${source}):`, err);
+
+    await chrome.storage.local.set({
+      lastErrorAt: new Date().toISOString(),
+      lastError: err.message
+    });
+
     await clearCurrentTaskState();
 
     if (isRunnerEnabled) {
       await scheduleNextRun(ERROR_RETRY_DELAY_MS);
     }
   });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== RUNNER_ALARM_NAME && alarm.name !== WATCHDOG_ALARM_NAME) return;
+
+  runLoopSafely(alarm.name);
 });
 
 async function startRunner() {
@@ -184,9 +303,10 @@ async function startRunner() {
 
   resetInProgressState();
 
+  await ensureWatchdog();
   await scheduleNextRun(500);
 
-  runLoop().catch(console.error);
+  runLoopSafely("start");
 
   return {
     ok: true,
@@ -201,6 +321,7 @@ async function stopRunner() {
 
   await saveState(false);
   await chrome.alarms.clear(RUNNER_ALARM_NAME);
+  await chrome.alarms.clear(WATCHDOG_ALARM_NAME);
 
   return {
     ok: true,
@@ -213,6 +334,7 @@ async function forceStopRunner() {
   resetInProgressState();
 
   await chrome.alarms.clear(RUNNER_ALARM_NAME);
+  await chrome.alarms.clear(WATCHDOG_ALARM_NAME);
 
   await chrome.storage.local.set({
     runnerEnabled: false,
@@ -241,14 +363,22 @@ async function forceStopRunner() {
 }
 
 async function runLoop() {
-  if (isRunLoopActive) return;
+  // A loop that hangs on an API call must not lock out every later trigger.
+  const isStale =
+    runLoopStartedAt !== null && Date.now() - runLoopStartedAt > RUN_LOOP_STALE_MS;
+
+  if (isRunLoopActive && !isStale) return;
 
   isRunLoopActive = true;
+  runLoopStartedAt = Date.now();
 
   try {
     await loadState();
 
     if (!isRunnerEnabled) return;
+
+    await ensureWatchdog();
+    await chrome.storage.local.set({ lastLoopAt: new Date().toISOString() });
 
     await recoverIfTaskTimedOut();
     await loadState();
@@ -265,6 +395,7 @@ async function runLoop() {
     }
   } finally {
     isRunLoopActive = false;
+    runLoopStartedAt = null;
   }
 }
 
@@ -327,7 +458,7 @@ async function handleSingleTask() {
 }
 
 async function fetchNextTask() {
-  const res = await fetch(`${CONFIG.BACKEND_URL}/tasks/next`, {
+  const res = await fetchWithTimeout(`${CONFIG.BACKEND_URL}/tasks/next`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -352,7 +483,7 @@ async function submitTaskResult(payload) {
     throw new Error("Missing recordId in GOAT task result");
   }
 
-  const res = await fetch(`${CONFIG.BACKEND_URL}/tasks/${payload.recordId}/result`, {
+  const res = await fetchWithTimeout(`${CONFIG.BACKEND_URL}/tasks/${payload.recordId}/result`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -399,3 +530,12 @@ async function openOrReuseRunnerTab(url) {
 
   return newTab;
 }
+
+// Runs on every worker start, including the first one after Chrome restarts.
+loadState().then(async () => {
+  if (!isRunnerEnabled) return;
+
+  await ensureWatchdog();
+  await scheduleNextRun(1000);
+  runLoopSafely("boot");
+});

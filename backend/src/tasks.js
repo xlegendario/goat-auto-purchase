@@ -4,7 +4,7 @@ import {
   fetchSizeRow,
   updateOrder
 } from "./airtable.js";
-import { resolveGoatUrlBySku } from "./retailed.js";
+import { resolveGoatUrlBySku } from "./goatSlug.js";
 import { buildSizeMap } from "./sizeNormalization.js";
 import { STATUS } from "./constants.js";
 

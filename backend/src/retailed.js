@@ -60,6 +60,7 @@ export async function resolveGoatUrlBySku(rawSku) {
       goatUrl: `https://www.goat.com/sneakers/${match.slug}`,
       slug: match.slug,
       matchedSku: match.sku || null,
+      exactMatch: !!exactMatch,
       raw: match
     };
   } catch (err) {
