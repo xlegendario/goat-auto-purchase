@@ -25,12 +25,12 @@ function runnerKey(runnerName, accountGroupKey) {
 }
 
 function formatTime(iso) {
-  if (!iso) return "onbekend";
+  if (!iso) return "unknown";
 
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "onbekend";
+  if (Number.isNaN(date.getTime())) return "unknown";
 
-  return date.toLocaleString("nl-NL", {
+  return date.toLocaleString("en-GB", {
     timeZone: "Europe/Amsterdam",
     day: "2-digit",
     month: "2-digit",
@@ -45,18 +45,18 @@ function runnerTitle(heartbeat) {
 }
 
 function detailLines(heartbeat) {
-  const lines = [`Laatste ronde: ${formatTime(heartbeat.lastLoopAt)}`];
+  const lines = [`Last loop: ${formatTime(heartbeat.lastLoopAt)}`];
 
   if (heartbeat.lastResultAt) {
-    lines.push(`Laatste resultaat: ${formatTime(heartbeat.lastResultAt)}${heartbeat.lastResultAction ? ` (${heartbeat.lastResultAction})` : ""}`);
+    lines.push(`Last result: ${formatTime(heartbeat.lastResultAt)}${heartbeat.lastResultAction ? ` (${heartbeat.lastResultAction})` : ""}`);
   }
 
   if (heartbeat.lastError) {
-    lines.push(`Laatste fout (${formatTime(heartbeat.lastErrorAt)}): \`${String(heartbeat.lastError).slice(0, 300)}\``);
+    lines.push(`Last error (${formatTime(heartbeat.lastErrorAt)}): \`${String(heartbeat.lastError).slice(0, 300)}\``);
   }
 
   if (heartbeat.lastTimeoutTask?.lastPage) {
-    lines.push(`Laatst vastgelopen op: ${String(heartbeat.lastTimeoutTask.lastPage).slice(0, 300)}`);
+    lines.push(`Last stuck on: ${String(heartbeat.lastTimeoutTask.lastPage).slice(0, 300)}`);
   }
 
   return lines;
@@ -145,8 +145,8 @@ async function evaluate(state) {
     state.silentAlerted = true;
     await postToDiscord(
       [
-        `🔴 ${runnerTitle(heartbeat)} geeft al ${Math.round(silentFor / 60000)} min geen teken van leven. Chrome, de VPS of de extensie staat waarschijnlijk stil.`,
-        `Laatste ping: ${formatTime(new Date(state.lastSeenAt).toISOString())}`,
+        `🔴 ${runnerTitle(heartbeat)} has not checked in for ${Math.round(silentFor / 60000)} min. Chrome, the VPS or the extension has probably stopped.`,
+        `Last ping: ${formatTime(new Date(state.lastSeenAt).toISOString())}`,
         ...detailLines(heartbeat)
       ].join("\n")
     );
@@ -155,14 +155,14 @@ async function evaluate(state) {
 
   if (silentFor < SILENT_AFTER_MS && state.silentAlerted) {
     state.silentAlerted = false;
-    await postToDiscord(`🟢 ${runnerTitle(heartbeat)} is weer bereikbaar.`);
+    await postToDiscord(`🟢 ${runnerTitle(heartbeat)} is checking in again.`);
   }
 
   if (heartbeat.consecutiveFailures >= FAILURE_STREAK_ALERT && !state.failingAlerted) {
     state.failingAlerted = true;
     await postToDiscord(
       [
-        `🟠 ${runnerTitle(heartbeat)} draait, maar de laatste ${heartbeat.consecutiveFailures} taken zijn mislukt of vastgelopen. Mogelijk uitgelogd of een captcha.`,
+        `🟠 ${runnerTitle(heartbeat)} is running, but the last ${heartbeat.consecutiveFailures} tasks failed or got stuck. Possibly logged out or a captcha.`,
         ...detailLines(heartbeat)
       ].join("\n")
     );
@@ -171,7 +171,7 @@ async function evaluate(state) {
 
   if (heartbeat.consecutiveFailures === 0 && state.failingAlerted) {
     state.failingAlerted = false;
-    await postToDiscord(`🟢 ${runnerTitle(heartbeat)} voert weer taken uit.`);
+    await postToDiscord(`🟢 ${runnerTitle(heartbeat)} is completing tasks again.`);
   }
 }
 
