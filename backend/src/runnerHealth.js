@@ -15,6 +15,8 @@ const SERVICE_LABEL = "GOAT Auto Purchase";
 
 const SILENT_AFTER_MS = 15 * 60 * 1000;
 const FAILURE_STREAK_ALERT = 5;
+const RECOVERY_STREAK = 3;
+const RECENT_ERROR_MS = 60 * 60 * 1000;
 const CHECK_INTERVAL_MS = 60 * 1000;
 
 // runnerKey -> { heartbeat, lastSeenAt, silentAlerted, failingAlerted }
@@ -51,12 +53,19 @@ function detailLines(heartbeat) {
     lines.push(`Last result: ${formatTime(heartbeat.lastResultAt)}${heartbeat.lastResultAction ? ` (${heartbeat.lastResultAction})` : ""}`);
   }
 
-  if (heartbeat.lastError) {
-    lines.push(`Last error (${formatTime(heartbeat.lastErrorAt)}): \`${String(heartbeat.lastError).slice(0, 300)}\``);
+  // The task that actually failed, which is what explains an alert.
+  if (heartbeat.lastFailure) {
+    const failure = heartbeat.lastFailure;
+    const detail = failure.errorMessage ? ` - \`${String(failure.errorMessage).slice(0, 300)}\`` : "";
+    lines.push(`Last failed task (${formatTime(failure.at)}): ${failure.action || "unknown"}${detail}`);
   }
 
-  if (heartbeat.lastTimeoutTask?.lastPage) {
-    lines.push(`Last stuck on: ${String(heartbeat.lastTimeoutTask.lastPage).slice(0, 300)}`);
+  // Loop errors (backend unreachable and such) stay in the extension until
+  // the next one, so only a recent one says anything about now.
+  const errorAge = heartbeat.lastErrorAt ? Date.now() - new Date(heartbeat.lastErrorAt).getTime() : Infinity;
+
+  if (heartbeat.lastError && errorAge < RECENT_ERROR_MS) {
+    lines.push(`Last loop error (${formatTime(heartbeat.lastErrorAt)}): \`${String(heartbeat.lastError).slice(0, 300)}\``);
   }
 
   return lines;
@@ -109,7 +118,13 @@ export function recordHeartbeat(body) {
     lastErrorAt: body.lastErrorAt || null,
     lastError: body.lastError || null,
     lastTimeoutTask: body.lastTimeoutTask || null,
-    consecutiveFailures: Number(body.consecutiveFailures) || 0
+    consecutiveFailures: Number(body.consecutiveFailures) || 0,
+    // Older extensions do not send it; treat a zero failure streak as recovered.
+    consecutiveSuccesses:
+      body.consecutiveSuccesses === undefined
+        ? (Number(body.consecutiveFailures) || 0) === 0 ? RECOVERY_STREAK : 0
+        : Number(body.consecutiveSuccesses) || 0,
+    lastFailure: body.lastFailure || null
   };
 
   const key = runnerKey(heartbeat.runnerName, heartbeat.accountGroupKey);
@@ -169,9 +184,9 @@ async function evaluate(state) {
     return;
   }
 
-  if (heartbeat.consecutiveFailures === 0 && state.failingAlerted) {
+  if (heartbeat.consecutiveSuccesses >= RECOVERY_STREAK && state.failingAlerted) {
     state.failingAlerted = false;
-    await postToDiscord(`🟢 ${runnerTitle(heartbeat)} is completing tasks again.`);
+    await postToDiscord(`🟢 ${runnerTitle(heartbeat)} is completing tasks again (${heartbeat.consecutiveSuccesses} in a row).`);
   }
 }
 
