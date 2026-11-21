@@ -102,13 +102,13 @@ async function runGoatFlow() {
     return;
   }
 
+  if (window.location.pathname.includes("/product/")) {
+    await handleRebuiltProductPage();
+    return;
+  }
+
   if (!window.location.pathname.includes("/sneakers/")) {
-    if (currentTask.useGoatSearchFallback) {
-      await searchGoatProductBySku(currentTask.sku);
-      return;
-    }
-  
-    window.location.href = currentTask.goatUrl;
+    await searchGoatProductBySku(currentTask.sku);
     return;
   }
 
@@ -125,7 +125,21 @@ async function runGoatFlow() {
  * product_variant_select per price row.
  */
 async function searchGoatProductBySku(sku) {
-  const product = await findGoatProduct(sku, slugFromGoatUrl(currentTask.goatUrl));
+  const storedSlug = slugFromGoatUrl(currentTask.goatUrl);
+  let product = null;
+  let section = "sneakers";
+
+  try {
+    product = await findProductRebuilt(sku, storedSlug);
+    section = "product";
+  } catch (error) {
+    if (!error.siteMissing) {
+      await reportTaskResult("PRODUCT_NOT_FOUND", { errorMessage: error.message, boughtSize: "" });
+      return;
+    }
+
+    product = await findGoatProduct(sku, storedSlug);
+  }
 
   if (!product) {
     await reportTaskResult("PRODUCT_NOT_FOUND", {
@@ -135,12 +149,253 @@ async function searchGoatProductBySku(sku) {
     return;
   }
 
-  currentTask.goatUrl = `https://www.goat.com/en-nl/sneakers/${product.slug}`;
+  currentTask.goatUrl = `https://www.goat.com/en-nl/${section}/${product.slug}`;
   currentTask.useGoatSearchFallback = false;
 
   await chrome.storage.local.set({ currentTask });
 
   window.location.href = currentTask.goatUrl;
+}
+
+/*
+ * The rebuilt goat.com (/product/ pages). GOAT serves it next to the older
+ * site; the runner's browser gets this one. Its buy panel lists every size
+ * at once as real buttons (data-qa size-variant-row-container), and in the
+ * Buy New tab a click on a size goes straight to checkout - that click is
+ * this flow's "Select". So everything is checked before it: the page is
+ * this SKU, the price is within the maximum, and the button shows GOAT's
+ * ask for exactly this size.
+ */
+async function handleRebuiltProductPage() {
+  await waitForPageReady();
+
+  if (await stopIfNeeded("product page")) return;
+
+  const parts = document.title.split("|").map((part) => part.trim());
+
+  if (parts.length < 3 || !skusMatchLoosely(currentTask.sku, parts[1])) {
+    console.warn("GOAT page is not this SKU, searching instead:", document.title);
+    await searchGoatProductBySku(currentTask.sku);
+    return;
+  }
+
+  const slug = window.location.pathname.split("/product/")[1]?.split(/[/?#]/)[0] || "";
+  const gender = genderFromTitle(parts[2], parts[0]);
+  const targetSize = resolveSizeForGender(gender, currentTask.sizeMap);
+
+  if (targetSize === null) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `No US size for GOAT gender "${gender}" in the size map`,
+      boughtSize: ""
+    });
+    return;
+  }
+
+  const apiAsk = await rebuiltAskForSize(slug, targetSize);
+
+  if (!Number.isFinite(apiAsk)) {
+    await reportTaskResult("NO_VALID_PRICE", {
+      errorMessage: `No new GOAT ask for US ${targetSize} (${slug})`,
+      boughtSize: String(targetSize)
+    });
+    return;
+  }
+
+  const estimatedTotal = apiAsk + 15;
+
+  if (estimatedTotal > Number(currentTask.maxBuyingPrice)) {
+    await reportTaskResult("NO_VALID_PRICE", {
+      errorMessage: `Best Price ${apiAsk} + shipping 15 = ${estimatedTotal} exceeds max ${currentTask.maxBuyingPrice}`,
+      finalPrice: estimatedTotal,
+      boughtSize: String(targetSize)
+    });
+    return;
+  }
+
+  const cell = await openRebuiltSizeCell(targetSize);
+
+  if (!cell) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `US ${targetSize} not found in the GOAT buy panel (${slug})`,
+      boughtSize: String(targetSize)
+    });
+    return;
+  }
+
+  // The button shows the price in whole euros; it must be this size's ask.
+  const shown = extractFirstEuroPrice(cell.innerText);
+
+  if (!Number.isFinite(shown) || Math.abs(shown - apiAsk) >= 1) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `US ${targetSize} shows ${shown}, GOAT ask is ${apiAsk}; not buying`,
+      boughtSize: String(targetSize)
+    });
+    return;
+  }
+
+  if (await stopIfNeeded("before select")) return;
+
+  await chrome.storage.local.set({
+    goatPendingCheckout: {
+      recordId: currentTask.recordId,
+      sku: currentTask.sku,
+      productName: parts[0].replace(/^Buy\s+/i, ""),
+      boughtSize: String(targetSize),
+      maxBuyingPrice: currentTask.maxBuyingPrice,
+      dryRun: currentTask.dryRun === true
+    }
+  });
+
+  cell.click();
+
+  await sleep(4000);
+}
+
+/*
+ * Opens the size panel from the buy bar and makes sure the Buy New tab is
+ * active, then returns the button for exactly this size, or null.
+ */
+async function openRebuiltSizeCell(targetSize) {
+  for (let i = 0; i < 10; i++) {
+    const cells = Array.from(document.querySelectorAll("[data-qa='size-variant-row-container']")).filter(isVisible);
+
+    if (cells.length) {
+      const newTab = document.querySelector("[data-qa='buy-bar-tab-new']");
+
+      if (newTab && newTab.getAttribute("aria-pressed") !== "true") {
+        newTab.click();
+        await sleep(800);
+        continue;
+      }
+
+      return (
+        cells.find((cell) => {
+          const match = String(cell.innerText || "").trim().match(/^(\d+(?:\.\d+)?)/);
+          return match && Number(match[1]) === targetSize;
+        }) || null
+      );
+    }
+
+    const opener = document.querySelector(
+      "[data-qa='buy-bar-lowest-prices-size'], [data-testid='buy-bar-lowest-prices-size']"
+    );
+    const button = opener?.closest("button") || opener?.querySelector("button") || opener;
+
+    if (button) button.click();
+
+    await sleep(1000);
+  }
+
+  return null;
+}
+
+async function rebuiltAskForSize(slug, targetSize) {
+  const buyBar = await goatApi(
+    `/api-web/buy-bar/v2?productTemplateId=${encodeURIComponent(slug)}&countryCode=NL&currency=EUR`
+  ).catch(() => null);
+
+  const row = (buyBar?.sizeOptions || []).find(
+    (option) =>
+      Number(option?.sizeOption?.value) === targetSize &&
+      option.shoeCondition === "new_no_defects" &&
+      option.boxCondition === "good_condition"
+  );
+
+  const prices = (row?.shippingOptions?.shipToVerify || [])
+    .map((option) => Number(option?.amount))
+    .filter((amount) => Number.isFinite(amount) && amount > 0);
+
+  return prices.length ? Math.min(...prices) / 100 : NaN;
+}
+
+/*
+ * Search, then confirm each candidate on its own page: the rebuilt site's
+ * title reads "Buy <name> | DD1503-101 | Women's | GOAT". An unknown SKU
+ * still returns a page of other shoes, so search alone is not enough.
+ */
+async function findProductRebuilt(sku, storedSlug) {
+  const candidates = storedSlug ? [storedSlug] : [];
+
+  const res = await fetch("/api/v2/consumer-search/search-suggestions", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      salesChannel: 1,
+      queryString: sku,
+      pageLimit: 10,
+      productLimit: 10,
+      recordTypes: [1, 4],
+      queries: []
+    })
+  });
+
+  if (!res.ok) {
+    const error = new Error(`GOAT search answered ${res.status}`);
+    error.siteMissing = [400, 404, 405, 410, 415].includes(res.status);
+    throw error;
+  }
+
+  const search = await res.json();
+  const wanted = compactSku(sku);
+
+  (search?.productItems || [])
+    .map((item) => item.slug)
+    .filter(Boolean)
+    .sort((a, b) => Number(compactSku(b).includes(wanted)) - Number(compactSku(a).includes(wanted)))
+    .forEach((slug) => {
+      if (!candidates.includes(slug)) candidates.push(slug);
+    });
+
+  const checked = [];
+
+  for (const slug of candidates.slice(0, 5)) {
+    const page = await fetch(`/en-nl/product/${encodeURIComponent(slug)}`, { credentials: "include" });
+
+    if (!page.ok) {
+      checked.push(`${slug}: page ${page.status}`);
+      continue;
+    }
+
+    const title = decodeEntities(((await page.text()).match(/<title>([^<]*)<\/title>/) || [])[1] || "");
+    const parts = title.split("|").map((part) => part.trim());
+
+    if (parts.length < 3 || !skusMatchLoosely(sku, parts[1])) {
+      checked.push(`${slug}: ${parts[1] || "no sku in title"}`);
+      continue;
+    }
+
+    return { slug, title: parts[0], gender: genderFromTitle(parts[2], parts[0]) };
+  }
+
+  const error = new Error(`No exact GOAT product for SKU ${sku} (${checked.slice(0, 3).join("; ")})`);
+
+  // The older site answers the search but has no /product/ pages at all.
+  if (checked.length && checked.every((line) => line.endsWith("page 404"))) error.siteMissing = true;
+
+  throw error;
+}
+
+function genderFromTitle(category, name) {
+  const cat = String(category || "").toLowerCase();
+  const title = String(name || "").toLowerCase();
+
+  if (cat.startsWith("women")) return "women";
+  if (cat.startsWith("men")) return "men";
+
+  if (cat.includes("kid") || cat.includes("youth") || cat.includes("infant") || cat.includes("toddler")) {
+    if (/\b(td|infant|toddler|crib)\b/.test(title)) return "toddler";
+    if (/\b(ps|preschool|little kids?)\b/.test(title)) return "preschool";
+    return "youth";
+  }
+
+  return "men";
+}
+
+function decodeEntities(text) {
+  const area = document.createElement("textarea");
+  area.innerHTML = text;
+  return area.value;
 }
 
 async function handleProductPage() {
@@ -452,7 +707,7 @@ async function goatApi(path) {
 }
 
 function slugFromGoatUrl(url) {
-  const match = String(url || "").match(/\/sneakers\/([^/?#]+)/);
+  const match = String(url || "").match(/\/(?:sneakers|product)\/([^/?#]+)/);
   return match ? match[1] : null;
 }
 
