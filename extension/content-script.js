@@ -115,278 +115,101 @@ async function runGoatFlow() {
   await handleProductPage();
 }
 
+/*
+ * GOAT rebuilt goat.com in November 2026. The search overlay, the
+ * preferences page and the size slider the old flow clicked through are
+ * gone. Finding the product now goes through GOAT's own web API from this
+ * tab (search by SKU, then product_templates/{slug}, which carries the sku,
+ * so the match is exact); buying goes through the new buy panel, whose
+ * parts carry stable data-qa names: buy_bar_item_desktop per size,
+ * product_variant_select per price row.
+ */
 async function searchGoatProductBySku(sku) {
-  const searchText = String(sku || "").trim();
+  const product = await findGoatProduct(sku, slugFromGoatUrl(currentTask.goatUrl));
 
-  if (!searchText) {
-    throw new Error("Missing SKU for GOAT search fallback");
-  }
-
-  const searchButton = getVisibleElements("button, div, span, a")
-    .find((el) => normalizeText(el.innerText || el.textContent) === "search");
-
-  if (!searchButton) {
-    throw new Error("GOAT search button not found");
-  }
-
-  clickElement(searchButton);
-  await sleep(800);
-
-  const searchInput =
-    Array.from(document.querySelectorAll("input")).find((input) => {
-      const rect = input.getBoundingClientRect();
-
-      return (
-        isVisible(input) &&
-        rect.top < 150 &&
-        rect.left < window.innerWidth * 0.4 &&
-        rect.width > 150
-      );
+  if (!product) {
+    await reportTaskResult("PRODUCT_NOT_FOUND", {
+      errorMessage: `No exact GOAT product for SKU ${sku}`,
+      boughtSize: ""
     });
-
-  if (!searchInput) {
-    throw new Error("GOAT search input not found");
+    return;
   }
 
-  searchInput.focus();
-
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLInputElement.prototype,
-    "value"
-  )?.set;
-
-  if (!setter) {
-    throw new Error("Could not set GOAT search input value");
-  }
-
-  setter.call(searchInput, searchText);
-
-  searchInput.dispatchEvent(new Event("input", { bubbles: true }));
-  searchInput.dispatchEvent(new Event("change", { bubbles: true }));
-
-  await sleep(2000);
-
-  /*
-   * Zoek de witte GOAT search-overlay.
-   * We mogen NIET meer globaal over alle sneakerlinks op de homepage zoeken.
-   */
-  const overlayCandidates = getVisibleElements("div, section")
-    .map((el) => {
-      const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-
-      return {
-        el,
-        rect,
-        backgroundColor: style.backgroundColor,
-        area: rect.width * rect.height
-      };
-    })
-    .filter((item) => {
-      const { rect, backgroundColor } = item;
-
-      const isWhite =
-        backgroundColor === "rgb(255, 255, 255)" ||
-        backgroundColor === "rgba(255, 255, 255, 1)";
-
-      return (
-        isWhite &&
-        rect.left < 80 &&
-        rect.top < 120 &&
-        rect.width > 250 &&
-        rect.width < 700 &&
-        rect.height > 150 &&
-        rect.height < 900
-      );
-    })
-    .sort((a, b) => a.area - b.area);
-
-  if (!overlayCandidates.length) {
-    throw new Error(
-      `GOAT search fallback: search overlay not found for SKU ${searchText}`
-    );
-  }
-
-  const overlay = overlayCandidates[0].el;
-  const overlayRect = overlay.getBoundingClientRect();
-
-  console.log("GOAT search overlay found:", {
-    sku: searchText,
-    rect: {
-      left: overlayRect.left,
-      top: overlayRect.top,
-      width: overlayRect.width,
-      height: overlayRect.height
-    }
-  });
-
-  /*
-   * CRITICAL:
-   * alleen sneakerlinks BINNEN de witte search-overlay.
-   */
-  const productLinks = Array.from(
-    overlay.querySelectorAll('a[href*="/sneakers/"]')
-  )
-    .filter(isVisible)
-    .map((a) => {
-      const rect = a.getBoundingClientRect();
-      const img = a.querySelector("img");
-
-      return {
-        el: a,
-        href: a.href,
-        text: normalizeText(a.innerText || a.textContent),
-        rect,
-        hasImage: !!img,
-        area: rect.width * rect.height
-      };
-    })
-    .filter((item) => {
-      return (
-        item.hasImage &&
-        item.href &&
-        item.href.includes("/sneakers/") &&
-        item.rect.left >= overlayRect.left &&
-        item.rect.right <= overlayRect.right + 5 &&
-        item.rect.top >= overlayRect.top &&
-        item.rect.bottom <= overlayRect.bottom + 5
-      );
-    })
-    .sort((a, b) => {
-      /*
-       * Het echte sneakerresultaat staat onder de suggestion chips.
-       * Daarom geven we het onderste resultaat voorrang.
-       */
-      if (a.rect.top !== b.rect.top) {
-        return b.rect.top - a.rect.top;
-      }
-
-      return a.area - b.area;
-    });
-
-  console.log(
-    "GOAT search product links INSIDE overlay:",
-    productLinks.map((item) => ({
-      href: item.href,
-      text: item.text,
-      rect: {
-        left: item.rect.left,
-        top: item.rect.top,
-        width: item.rect.width,
-        height: item.rect.height
-      }
-    }))
-  );
-
-  if (!productLinks.length) {
-    throw new Error(
-      `GOAT search fallback: no sneaker result inside search overlay for SKU ${searchText}`
-    );
-  }
-
-  const productLink = productLinks[0];
-  const targetUrl = productLink.href;
-
-  if (!targetUrl || !targetUrl.includes("/sneakers/")) {
-    throw new Error(
-      `GOAT search fallback found invalid product URL for SKU ${searchText}: ${targetUrl}`
-    );
-  }
-
-  console.log("Opening GOAT search result from overlay:", {
-    sku: searchText,
-    href: targetUrl,
-    text: productLink.text
-  });
-
-  /*
-   * Bewaar de gevonden URL.
-   * Dit is GOAT AUTO PURCHASE, dus de storage key blijft currentTask.
-   */
-  currentTask.goatUrl = targetUrl;
+  currentTask.goatUrl = `https://www.goat.com/en-nl/sneakers/${product.slug}`;
   currentTask.useGoatSearchFallback = false;
 
-  await chrome.storage.local.set({
-    currentTask
-  });
+  await chrome.storage.local.set({ currentTask });
 
-  window.location.href = targetUrl;
+  window.location.href = currentTask.goatUrl;
 }
+
 async function handleProductPage() {
   await waitForPageReady();
 
   if (await stopIfNeeded("product page")) return;
 
-  await verifyProductOrFail();
+  // The slug may come from SKU Master or an old Retailed lookup; check that
+  // the page is really this SKU before anything is bought.
+  const pageSlug = slugFromGoatUrl(window.location.pathname);
+  const product = await findGoatProduct(currentTask.sku, pageSlug, { onlyStored: true });
 
-  const state = await chrome.storage.local.get(["goatBuyReady", "goatResolvedPreference"]);
-  const buyReady = state.goatBuyReady === true;
-  const resolved = state.goatResolvedPreference;
-
-  if (!buyReady) {
-    const sizeType = await detectGoatSizeType();
-    const targetSize = resolveTargetSize(sizeType, currentTask.sizeMap);
-    const category = sizeTypeToCategory(sizeType);
-
-    if (!targetSize || !category) {
-      await reportTaskResult("SIZE_NOT_FOUND", {
-        errorMessage: `Could not resolve GOAT preference. sizeType=${sizeType}, targetSize=${targetSize}`,
-        boughtSize: ""
-      });
-      return;
-    }
-
-    await chrome.storage.local.set({
-      goatBuyReady: false,
-      goatResolvedPreference: {
-        sizeType,
-        category,
-        targetSize
-      }
-    });
-
-    console.log("ALWAYS going to preferences before buying:", {
-      sizeType,
-      category,
-      targetSize
-    });
-
-    window.location.href = "https://www.goat.com/account/preferences";
+  if (!product) {
+    console.warn("GOAT page is not this SKU, searching instead:", pageSlug);
+    await searchGoatProductBySku(currentTask.sku);
     return;
   }
 
-  if (!resolved?.targetSize) {
-    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
-    window.location.href = currentTask.goatUrl;
-    return;
-  }
+  const targetSize = resolveSizeForGender(product.gender, currentTask.sizeMap);
 
-  const targetSize = resolved.targetSize;
-
-  console.log("Preferences just set. Now opening size panel and buying:", resolved);
-
-  const opened = await openSizePanel();
-
-  if (!opened) {
-    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
-
+  if (targetSize === null) {
     await reportTaskResult("SIZE_NOT_FOUND", {
-      errorMessage: "Could not open GOAT size panel after preferences save",
-      boughtSize: targetSize
+      errorMessage: `No US size for GOAT gender "${product.gender}" in the size map`,
+      boughtSize: ""
     });
     return;
   }
 
-  await sleep(500);
+  const panel = await openBuyPanel();
 
-  const bestPrice = findBestPriceOption();
+  if (!panel) {
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: "GOAT buy panel not found",
+      boughtSize: String(targetSize)
+    });
+    return;
+  }
+
+  // The panel shows no selected state that can be read, so the size is
+  // confirmed by price: the Best Price row must carry GOAT's ask for exactly
+  // this size. A click that landed on a neighbouring size shows that size's
+  // price; then try again, and never buy on a mismatch.
+  const apiAsk = await askForSize(product.id, targetSize);
+
+  if (!Number.isFinite(apiAsk)) {
+    await reportTaskResult("NO_VALID_PRICE", {
+      errorMessage: `No new GOAT ask for US ${targetSize} (${product.slug})`,
+      boughtSize: String(targetSize)
+    });
+    return;
+  }
+
+  let bestPrice = null;
+  let lastSeen = null;
+
+  for (let attempt = 0; attempt < 3 && !bestPrice; attempt++) {
+    const selected = await selectSizeInBuyPanel(panel, targetSize);
+    if (!selected) continue;
+
+    const row = await waitForBestPriceRow();
+    lastSeen = row?.price ?? null;
+
+    if (row && Math.abs(row.price - apiAsk) <= 0.01) bestPrice = row;
+  }
 
   if (!bestPrice) {
-    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
-
-    await reportTaskResult("NO_VALID_PRICE", {
-      errorMessage: "Best Price / Under Retail option not found",
-      boughtSize: targetSize
+    await reportTaskResult("SIZE_NOT_FOUND", {
+      errorMessage: `Could not select US ${targetSize}: page shows ${lastSeen}, GOAT ask is ${apiAsk}`,
+      boughtSize: String(targetSize)
     });
     return;
   }
@@ -394,32 +217,258 @@ async function handleProductPage() {
   const estimatedTotal = bestPrice.price + 15;
 
   if (estimatedTotal > Number(currentTask.maxBuyingPrice)) {
-    await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
-
     await reportTaskResult("NO_VALID_PRICE", {
       errorMessage: `Best Price ${bestPrice.price} + shipping 15 = ${estimatedTotal} exceeds max ${currentTask.maxBuyingPrice}`,
       finalPrice: estimatedTotal,
-      boughtSize: targetSize
+      boughtSize: String(targetSize)
     });
     return;
   }
+
+  if (await stopIfNeeded("before select")) return;
 
   await chrome.storage.local.set({
     goatPendingCheckout: {
       recordId: currentTask.recordId,
       sku: currentTask.sku,
-      productName: getProductName(),
-      boughtSize: targetSize,
+      productName: product.title || "",
+      boughtSize: String(targetSize),
       maxBuyingPrice: currentTask.maxBuyingPrice,
       dryRun: currentTask.dryRun === true
     }
   });
 
-  await chrome.storage.local.remove(["goatBuyReady", "goatResolvedPreference"]);
-
-  clickElement(bestPrice.selectButton);
+  bestPrice.selectButton.scrollIntoView({ block: "center" });
+  await sleep(400);
+  clickOnce(bestPrice.selectButton);
 
   await sleep(4000);
+}
+
+async function findGoatProduct(sku, storedSlug, { onlyStored = false } = {}) {
+  const candidates = [];
+
+  if (storedSlug) candidates.push(storedSlug);
+
+  if (!onlyStored) {
+    const search = await goatApi(
+      `/web-api/consumer-search/get-product-search-results?salesChannelId=1&queryString=${encodeURIComponent(sku)}&sortType=1&pageLimit=12&pageNumber=1`
+    ).catch(() => null);
+
+    const wanted = compactSku(sku);
+
+    (search?.data?.productsList || [])
+      .map((hit) => hit.slug)
+      .filter(Boolean)
+      .sort((a, b) => Number(compactSku(b).includes(wanted)) - Number(compactSku(a).includes(wanted)))
+      .forEach((slug) => {
+        if (!candidates.includes(slug)) candidates.push(slug);
+      });
+  }
+
+  for (const slug of candidates.slice(0, 6)) {
+    const template = await goatApi(`/web-api/v1/product_templates/${encodeURIComponent(slug)}`).catch(() => null);
+
+    if (!template?.id || !skusMatchLoosely(sku, template.sku)) continue;
+
+    return {
+      id: template.id,
+      slug: template.slug || slug,
+      title: template.name || "",
+      gender: String(template.singleGender || (template.gender || [])[0] || "men").toLowerCase()
+    };
+  }
+
+  return null;
+}
+
+function resolveSizeForGender(gender, sizeMap) {
+  if (!sizeMap) return null;
+
+  let raw;
+
+  if (gender.includes("women")) raw = sizeMap.usWomensSize;
+  else if (gender.includes("youth")) raw = sizeMap.usGsSize;
+  else if (gender.includes("infant") || gender.includes("toddler")) raw = sizeMap.usTdSize || sizeMap.usPsSize;
+  else if (gender.includes("pre") || gender.includes("child")) raw = sizeMap.usPsSize || sizeMap.usTdSize;
+  else raw = sizeMap.usSize;
+
+  const match = String(raw ?? "").replace(",", ".").match(/\d+(\.\d+)?/);
+
+  return match ? Number(match[0]) : null;
+}
+
+async function openBuyPanel() {
+  for (let i = 0; i < 10; i++) {
+    const panel = document.querySelector("[data-qa='buy_bar_desktop']");
+
+    if (panel && panel.querySelector("[data-qa='buy_bar_item_desktop']")) return panel;
+
+    // A facts or fit window can cover the panel.
+    const closeWindow = document.querySelector("[data-qa='window_close_button']");
+    if (closeWindow && isVisible(closeWindow)) clickElementAtCenter(closeWindow);
+
+    const opener = document.querySelector("[data-qa='open_size_preferences']");
+    if (opener && isVisible(opener)) clickElementAtCenter(opener);
+
+    await sleep(800);
+  }
+
+  return null;
+}
+
+/*
+ * The size row is a looping Swiper carousel: each size exists twice and
+ * most of them sit outside the panel, moved by a CSS transform, so
+ * scrollIntoView does nothing. Step with the panel's own right arrow until
+ * the size is inside the panel, then click it there. A plain
+ * element.click() is ignored by the new site; a pointer sequence is not.
+ */
+async function selectSizeInBuyPanel(panel, targetSize) {
+  const label = String(targetSize);
+  const inPanel = (el) => {
+    const r = el.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    return r.width > 0 && r.left >= p.left && r.right <= p.right;
+  };
+
+  for (let i = 0; i < 15; i++) {
+    const items = Array.from(panel.querySelectorAll(`[data-qa="buy_bar_size_${label}"]`))
+      .map((el) => el.closest("[data-qa='buy_bar_item_desktop']"))
+      .filter(Boolean);
+
+    if (!items.length) return false;
+
+    const item = items.find(inPanel);
+
+    if (item && (await settled(item))) {
+      clickOnce(item);
+      await sleep(1500);
+      return true;
+    }
+
+    if (item) continue;
+
+    const next = Array.from(panel.querySelectorAll("[data-qa='arrow_button']")).find((button) =>
+      /right/i.test(button.getAttribute("aria-label") || "")
+    );
+
+    if (!next) return false;
+
+    clickOnce(next);
+    // Swiper picks the size from the slide under the click; while it is
+    // still sliding that is the neighbour. Let the transition finish.
+    await sleep(1200);
+  }
+
+  return false;
+}
+
+async function settled(el) {
+  for (let i = 0; i < 3; i++) {
+    const before = el.getBoundingClientRect().left;
+    await sleep(500);
+    if (Math.abs(el.getBoundingClientRect().left - before) >= 1) return false;
+  }
+
+  return true;
+}
+
+async function waitForBestPriceRow() {
+  for (let i = 0; i < 10; i++) {
+    for (const button of document.querySelectorAll("[data-qa='product_variant_select']")) {
+      if (!isVisible(button)) continue;
+
+      let row = button;
+      for (let j = 0; j < 5 && row && !/€\s*\d/.test(row.innerText || ""); j++) row = row.parentElement;
+
+      const text = normalizeText(row?.innerText || "");
+
+      // "Under Retail" replaces "Best Price" when the ask is below retail.
+      if (!text.includes("best price") && !text.includes("under retail")) continue;
+
+      const price = extractFirstEuroPrice(row.innerText);
+
+      if (Number.isFinite(price)) return { price, row, selectButton: button };
+    }
+
+    await sleep(500);
+  }
+
+  return null;
+}
+
+/*
+ * One pointer sequence on the element itself, and nothing more. Not
+ * elementFromPoint: in a carousel that is still sliding, the point already
+ * belongs to the neighbouring size. And not clickAtPoint, which also calls
+ * el.click() afterwards - on Select that would be a second click.
+ */
+function clickOnce(el) {
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const target = el.firstElementChild || el;
+
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+    const EventClass = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+
+    target.dispatchEvent(new EventClass(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: x,
+      clientY: y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      view: window
+    }));
+  }
+}
+
+async function askForSize(productId, targetSize) {
+  const asks = await goatApi(
+    `/web-api/v1/product_variants/buy_bar_data?productTemplateId=${encodeURIComponent(productId)}&countryCode=NL`
+  ).catch(() => []);
+
+  const ask = (Array.isArray(asks) ? asks : []).find(
+    (row) =>
+      Number(row?.sizeOption?.value) === targetSize &&
+      row.shoeCondition === "new_no_defects" &&
+      row.boxCondition === "good_condition"
+  );
+
+  const cents = Number(ask?.lowestPriceCents?.amount);
+  return Number.isFinite(cents) ? cents / 100 : NaN;
+}
+
+async function goatApi(path) {
+  const res = await fetch(path, { credentials: "include", headers: { Accept: "application/json" } });
+
+  if (!res.ok) throw new Error(`GOAT ${path.split("?")[0]} answered ${res.status}`);
+
+  return res.json();
+}
+
+function slugFromGoatUrl(url) {
+  const match = String(url || "").match(/\/sneakers\/([^/?#]+)/);
+  return match ? match[1] : null;
+}
+
+function compactSku(value) {
+  return String(value || "").toUpperCase().replace(/[\s\-._]/g, "");
+}
+
+function skusMatchLoosely(a, b) {
+  const parts = (value) =>
+    String(value || "")
+      .split("/")
+      .map(compactSku)
+      .filter(Boolean);
+
+  const right = new Set(parts(b));
+  return parts(a).some((part) => right.has(part));
 }
 
 async function handlePreferencesPage() {
